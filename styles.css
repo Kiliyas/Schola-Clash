@@ -40,6 +40,8 @@ h1, h2, h3 { letter-spacing: -.04em; }
 .environment-dot { width: 7px; height: 7px; border-radius: 50%; background: #91b75e; }
 .role-badge { border-color: transparent; background: var(--green-soft); color: var(--green); }
 .profile-picker select { max-width: 205px; border: 1px solid var(--line); border-radius: 11px; padding: 9px 30px 9px 11px; color: var(--ink); background: white; }
+.profile-picker[hidden] { display: none; }
+.topbar-auth { min-height: 38px; padding: 0 12px; font-size: 12px; white-space: nowrap; }
 .main-shell { width: min(1240px, 100%); margin: 0 auto; padding: 42px 28px 56px; }
 .app-footer { width: min(1240px, 100%); display: flex; justify-content: space-between; margin: 0 auto; padding: 17px 28px 24px; color: #7f8a82; font-size: 12px; }
 .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin: 3px 0 22px; }
@@ -206,6 +208,7 @@ td strong { font-size: 14px; }
   .brand { font-size: 16px; }
   .environment-pill, .role-badge { display: none; }
   .profile-picker select { max-width: 145px; font-size: 11px; }
+  .topbar-auth { min-height: 35px; padding: 0 9px; font-size: 11px; }
   .main-shell { padding: 23px 14px 30px; }
   .page-heading { align-items: flex-start; flex-direction: column; gap: 15px; }
   .page-heading .button { width: 100%; }

@@ -4,7 +4,13 @@ An English-language, Kazakhstan-focused classroom review prototype. Teachers cre
 
 ## Run
 
-Open `index.html` in a modern browser. The prototype has no build step or dependencies. Data is saved in browser `localStorage` under `schola-clash-prototype-v2`.
+Run a local web server from this folder, then open `http://localhost:8000`:
+
+```powershell
+python -m http.server 8000
+```
+
+There is no build step or package install. The app loads Supabase JS from a CDN. Demo workspace data is saved in browser `localStorage` under `schola-clash-prototype-v2`.
 
 ## Demo flow
 
@@ -16,6 +22,8 @@ Open `index.html` in a modern browser. The prototype has no build step or depend
 6. Switch to the teacher profile to see the results table.
 
 The profile picker simulates separate accounts on one device. **SCHOLA11** is a display-only invitation code; it does not create real accounts.
+
+The Supabase schema is deployed to the connected **Schola clash** project. Use **Sign in** in the header to sign in or create a student account; after signing in, the app reads that account's profile from Supabase. The prototype screens still use demo data; see [supabase/README.md](supabase/README.md) for the remaining integration work.
 
 ## In the prototype
 
@@ -36,6 +44,6 @@ The profile picker simulates separate accounts on one device. **SCHOLA11** is a 
 
 ## Not implemented
 
-There is no server, sign-in, cross-device data, real invite-code flow, photo or document upload, OCR, LLM question generation, or real-time match. Speed does not affect ranked scores. The demo uses local profiles and sample questions only, so its ELO and results exist only in this browser.
+Chapters and matches are not yet stored in Supabase, so demo results do not sync across devices. There is no real invite-code flow, photo or document upload, OCR, LLM question generation, or real-time match. Speed does not affect ranked scores. The demo uses local profiles and sample questions only, so its ELO and results exist only in this browser.
 
 For a fresh demo, clear this page’s site data or delete `schola-clash-prototype-v2` from `localStorage` in browser developer tools.

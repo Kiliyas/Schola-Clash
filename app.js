@@ -85,10 +85,18 @@ if (stateMigrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 processBattleDeadlines();
 const app = document.getElementById("app");
 const userSelect = document.getElementById("userSelect");
+const profilePicker = userSelect.closest(".profile-picker");
 const roleBadge = document.getElementById("roleBadge");
 const modalBackdrop = document.getElementById("modalBackdrop");
 const modal = document.getElementById("modal");
+const supabaseStatus = document.getElementById("supabaseStatus");
+const authButton = document.getElementById("authButton");
+const supabaseClient = window.scholaSupabase;
 let activeBattleId = null;
+let supabaseSession = null;
+let supabaseProfile = null;
+let supabaseProfileError = null;
+let supabaseAuthReady = !supabaseClient;
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -169,6 +177,147 @@ function closeModal() {
   modal.innerHTML = "";
 }
 
+function paintSupabaseStatus() {
+  if (!supabaseClient) {
+    supabaseStatus.textContent = "Supabase client unavailable";
+    authButton.textContent = "Connection unavailable";
+    authButton.disabled = true;
+    return;
+  }
+
+  authButton.disabled = false;
+  if (!supabaseSession) {
+    supabaseStatus.textContent = "Supabase configured · demo data";
+    supabaseStatus.title = "The client is configured. Sign in to check the database profile.";
+    authButton.textContent = "Sign in";
+    return;
+  }
+
+  if (supabaseProfile) {
+    supabaseStatus.textContent = `Connected as ${supabaseProfile.display_name} · ${supabaseProfile.role} · demo data`;
+    supabaseStatus.title = "Signed in and profile loaded from Supabase. The dashboard data is still local demo data.";
+  } else {
+    supabaseStatus.textContent = "Signed in · profile not loaded";
+    supabaseStatus.title = supabaseProfileError || "No profile row was returned for this account.";
+  }
+  authButton.textContent = "Sign out";
+}
+
+async function refreshSupabaseSession(session = undefined) {
+  if (!supabaseClient) return;
+  let nextSession = session;
+  if (nextSession === undefined) {
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) {
+      supabaseSession = null;
+      supabaseProfile = null;
+      supabaseProfileError = error.message;
+      supabaseAuthReady = true;
+      paintSupabaseStatus();
+      render();
+      return;
+    }
+    nextSession = data.session;
+  }
+
+  supabaseSession = nextSession;
+  supabaseProfile = null;
+  supabaseProfileError = null;
+  if (supabaseSession?.user) {
+    const { data, error } = await supabaseClient
+      .from("user_profiles")
+      .select("display_name, role")
+      .eq("id", supabaseSession.user.id)
+      .maybeSingle();
+    if (error) supabaseProfileError = error.message;
+    else if (!data) supabaseProfileError = "No profile row was returned for this account.";
+    else supabaseProfile = data;
+  }
+  supabaseAuthReady = true;
+  paintSupabaseStatus();
+  render();
+}
+
+function openAuthModal(mode = "signin") {
+  if (!supabaseClient) {
+    showToast("Supabase client is not available. Check the internet connection and reload the page.");
+    return;
+  }
+
+  const signingUp = mode === "signup";
+  openModal(`<div class="modal-header"><div><p class="eyebrow">SUPABASE ACCOUNT</p><h2 id="modalTitle">${signingUp ? "Create a student account" : "Sign in to Schola Clash"}</h2></div><button class="button button-quiet" type="button" id="closeAuth">Close</button></div>
+    <p class="modal-description">${signingUp ? "This creates a new Supabase account with the student role. A confirmation email may be required before sign-in." : "Sign in uses an existing account; choose “Create a student account” below if you have not registered yet."} The demo profiles below are separate from Supabase accounts.</p>
+    <form id="authForm">
+      ${signingUp ? `<div class="field"><label for="authName">Your name</label><input id="authName" name="displayName" autocomplete="name" maxlength="80" required></div>` : ""}
+      <div class="field"><label for="authEmail">Email</label><input id="authEmail" name="email" type="email" autocomplete="email" required></div>
+      <div class="field"><label for="authPassword">Password</label><input id="authPassword" name="password" type="password" autocomplete="${signingUp ? "new-password" : "current-password"}" minlength="8" required></div>
+      <p class="small" id="authMessage" role="status" aria-live="polite"></p>
+      <div class="modal-footer"><button class="button button-quiet" type="button" id="toggleAuthMode">${signingUp ? "Already have an account? Sign in" : "New here? Create a student account"}</button><div class="modal-actions"><button class="button button-primary" type="submit">${signingUp ? "Create account" : "Sign in"}</button></div></div>
+    </form>`);
+
+  document.getElementById("closeAuth").addEventListener("click", closeModal);
+  document.getElementById("toggleAuthMode").addEventListener("click", () => openAuthModal(signingUp ? "signin" : "signup"));
+  document.getElementById("authForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const submit = form.querySelector('button[type="submit"]');
+    const message = document.getElementById("authMessage");
+    const email = form.elements.email.value.trim();
+    const password = form.elements.password.value;
+    submit.disabled = true;
+    message.textContent = "Connecting to Supabase…";
+
+    let result;
+    try {
+      result = signingUp
+        ? await supabaseClient.auth.signUp({
+          email,
+          password,
+          options: { data: { display_name: form.elements.displayName.value.trim() } },
+        })
+        : await supabaseClient.auth.signInWithPassword({ email, password });
+    } catch (error) {
+      message.textContent = error.message || "Could not reach Supabase. Check your connection and try again.";
+      submit.disabled = false;
+      return;
+    }
+
+    if (result.error) {
+      message.textContent = result.error.message;
+      submit.disabled = false;
+      return;
+    }
+
+    if (signingUp && !result.data.session) {
+      message.textContent = `Account created in Supabase. Check ${email} for the confirmation link, then sign in here.`;
+      submit.disabled = false;
+      return;
+    }
+
+    await refreshSupabaseSession(result.data.session);
+    closeModal();
+    showToast(signingUp ? "Account connected to Supabase." : "Signed in to Supabase.");
+  });
+}
+
+authButton.addEventListener("click", async () => {
+  if (!supabaseClient) return openAuthModal();
+  if (!supabaseSession) return openAuthModal();
+  const { error } = await supabaseClient.auth.signOut();
+  if (error) return showToast(error.message);
+  await refreshSupabaseSession(null);
+  showToast("Signed out of Supabase.");
+});
+
+if (supabaseClient) {
+  supabaseClient.auth.onAuthStateChange((_event, session) => {
+    window.setTimeout(() => refreshSupabaseSession(session), 0);
+  });
+  refreshSupabaseSession();
+} else {
+  paintSupabaseStatus();
+}
+
 modalBackdrop.addEventListener("click", (event) => {
   if (event.target === modalBackdrop) closeModal();
 });
@@ -177,6 +326,19 @@ document.addEventListener("keydown", (event) => {
 });
 
 function updateProfilePicker() {
+  if (supabaseClient && !supabaseAuthReady) {
+    profilePicker.hidden = true;
+    roleBadge.textContent = "Checking account…";
+    return;
+  }
+
+  if (supabaseSession) {
+    profilePicker.hidden = true;
+    roleBadge.textContent = supabaseProfile?.role === "teacher" ? "Teacher" : "Student";
+    return;
+  }
+
+  profilePicker.hidden = false;
   const person = currentUser();
   roleBadge.textContent = person.role === "teacher" ? "Teacher" : "Student";
   userSelect.innerHTML = state.users.map((profile) => {
@@ -188,6 +350,16 @@ function updateProfilePicker() {
 function render() {
   processBattleDeadlines();
   updateProfilePicker();
+  if (supabaseClient && !supabaseAuthReady) {
+    app.innerHTML = `${pageHeading("SUPABASE", "Checking your account", "Restoring your sign-in before loading the demo workspace.")}<div class="empty-state"><strong>Connecting…</strong></div>`;
+    return;
+  }
+  if (supabaseSession) {
+    const displayName = supabaseProfile?.display_name || supabaseSession.user.email || "your account";
+    app.innerHTML = `${pageHeading("SUPABASE ACCOUNT", `Welcome, ${escapeHtml(displayName)}`, "You are signed in with your own account. This screen uses the profile loaded from Supabase.")}
+      <section class="empty-state"><strong>${supabaseProfile ? `Account role: ${escapeHtml(supabaseProfile.role)}` : "Your account is signed in"}</strong><span>${supabaseProfile ? "Your profile was read from the database successfully." : `The profile could not be loaded: ${escapeHtml(supabaseProfileError || "no profile row was returned")}`}</span><p style="margin-top:14px">Classrooms, chapters, and matches are still demo data and are not shown as part of this account yet. Sign out to return to the local demo.</p></section>`;
+    return;
+  }
   const person = currentUser();
   if (!person) return;
   person.role === "teacher" ? renderTeacher(person) : renderStudent(person);
@@ -222,7 +394,7 @@ function renderTeacher(person) {
   app.innerHTML = `${pageHeading("TEACHER WORKSPACE", "Make every review count", "Turn your class materials into chapters, then see where students are growing.", action)}
     <section class="hero-banner" aria-label="Classroom overview">
       <div class="hero-copy"><p class="eyebrow">ONE STREAM · TWO CLASSROOMS</p><h2>Make room for a little friendly competition.</h2><p>Students in Grade 11A and Grade 11B can challenge one another on the same approved chapter.</p></div>
-      <div class="hero-side"><span class="hero-side-label">Your stream invite code</span><strong class="hero-side-number">SCHOLA11</strong><span class="hero-side-note">Demo code only · sign-in is not connected yet</span></div>
+      <div class="hero-side"><span class="hero-side-label">Your stream invite code</span><strong class="hero-side-number">SCHOLA11</strong><span class="hero-side-note">Demo code only · demo workspace</span></div>
     </section>
     ${teacherStats(person, students, sets)}
     <nav class="tab-bar" aria-label="Teacher dashboard sections"><button class="tab-button active" data-tab="sets">Chapters</button><button class="tab-button" data-tab="results">Student results</button><button class="tab-button" data-tab="classes">My classes</button></nav>

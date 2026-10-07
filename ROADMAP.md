@@ -2,7 +2,7 @@
 
 ## Where the project is now
 
-The browser prototype can demo teacher-created chapters and asynchronous duels, but it stores everything in one browser. The first product-rules milestone is implemented in the prototype. The next milestone is shared accounts and data across devices.
+The browser prototype can demo teacher-created chapters and asynchronous duels, but its dashboard data is still local to one browser. The Supabase schema and duel RPCs are deployed to the connected project. The browser now supports email/password sign-in, student account creation, and loading the signed-in user's profile. Chapters, classes, and matches still need to move from demo storage to Supabase before shared data works end to end.
 
 ## 1. Lock and implement the duel rules — complete
 
@@ -71,7 +71,6 @@ Consider online live duels only if pilot feedback supports them. Consider speed 
 
 ## Next work session
 
-1. Choose a backend and hosting approach for the first multi-device release.
-2. Implement teacher sign-in, stream/class membership, and chapter publishing on the server.
-3. Move challenge creation, acceptance, match attempts, and ELO updates behind server-side rules.
-4. Verify the duel loop on two separate devices before adding OCR or AI generation.
+1. Implement teacher sign-in, stream/class membership, and chapter publishing in the frontend.
+2. Wire challenge creation, acceptance, attempts, and ELO updates to the server-side RPCs.
+3. Verify the duel loop on two separate devices before adding OCR or AI generation.
