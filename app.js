@@ -249,23 +249,23 @@ function emptyState(title, detail) {
 function renderTeacherResults(students, sets) {
   if (!sets.length || !students.length) return emptyState("Results will appear here", "Publish a chapter and invite students to start collecting ranked match results.");
 
-  const rows = students.map((student) => {
+  const rows = rankedStudents(students).map((student) => {
     const matches = state.battles.filter((battle) => ["done", "forfeit", "void"].includes(battle.status) && battle.participants.includes(student.id) && sets.some((questionSet) => questionSet.id === battle.setId));
     const scoredMatches = matches.filter((battle) => battle.attempts[student.id].submitted);
     const correct = scoredMatches.reduce((total, battle) => total + calculateScore(battle, student.id), 0);
     const total = scoredMatches.reduce((sum, battle) => sum + battle.questions.length, 0);
     const wins = matches.filter((battle) => battle.winner === student.id).length;
-    return `<tr><td><strong>${escapeHtml(student.name)}</strong><div class="small">${escapeHtml(student.className)}</div></td><td>${getStreamRating(student.id)} ELO</td><td>${matches.length}</td><td><strong>${correct} / ${total}</strong></td><td>${wins}</td></tr>`;
+    return `<tr><td><span class="rank-number ${studentRank(students, student.id) <= 3 ? "rank-top" : ""}">${studentRank(students, student.id)}</span></td><td><strong>${escapeHtml(student.name)}</strong><div class="small">${escapeHtml(student.className)}</div></td><td><strong class="leaderboard-rating">${getStreamRating(student.id)}</strong> ELO</td><td>${matches.length}</td><td><strong>${correct} / ${total}</strong></td><td>${wins}</td></tr>`;
   }).join("");
 
-  return `<div class="table-wrap"><table><thead><tr><th>Student</th><th>Stream rating</th><th>Ranked matches</th><th>Correct answers</th><th>Wins</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Student</th><th>Stream rating</th><th>Ranked matches</th><th>Correct answers</th><th>Wins</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function renderClasses(students) {
   const classNames = [...new Set(students.map((student) => student.className))].sort();
   return `<div class="callout"><p class="callout-copy">This invite code is only a visual placeholder in the prototype. Students are added here as demo profiles and switch users from the top-right menu.</p><span class="code-chip">SCHOLA11</span></div><div class="class-grid">${classNames.map((className) => {
-    const members = students.filter((student) => student.className === className);
-    return `<article class="surface-card class-card"><div class="class-card-head"><div><h3>${escapeHtml(className)}</h3><span class="small">${members.length} students</span></div><span class="class-chip">CLASS</span></div><div class="class-list">${members.map((student) => `<div class="player-block"><span class="avatar">${escapeHtml(student.name.slice(0, 1))}</span><div class="player-copy"><strong>${escapeHtml(student.name)}</strong><span class="small">${escapeHtml(student.stream)}</span></div></div>`).join("")}</div></article>`;
+    const members = rankedStudents(students.filter((student) => student.className === className));
+    return `<article class="surface-card class-card"><div class="class-card-head"><div><h3>${escapeHtml(className)}</h3><span class="small">${members.length} students · ranked by ELO</span></div><span class="class-chip">CLASS</span></div><div class="class-list">${members.map((student) => `<div class="player-block"><span class="avatar">${escapeHtml(student.name.slice(0, 1))}</span><div class="player-copy"><strong>${escapeHtml(student.name)}</strong><span class="small">#${studentRank(members, student.id)} in class</span></div><span class="class-rating">${getStreamRating(student.id)} <small>ELO</small></span></div>`).join("")}</div></article>`;
   }).join("") || emptyState("No students yet", "Add a demo student to preview the class list.")}</div>`;
 }
 
@@ -364,6 +364,43 @@ function getStreamRating(studentId) {
   return student?.streamRatings?.[student.stream] ?? 1000;
 }
 
+function rankedStudents(students) {
+  return [...students].sort((first, second) => getStreamRating(second.id) - getStreamRating(first.id) || first.name.localeCompare(second.name));
+}
+
+function studentRank(students, studentId) {
+  const ordered = rankedStudents(students);
+  const index = ordered.findIndex((student) => student.id === studentId);
+  if (index < 0) return 0;
+  const rating = getStreamRating(studentId);
+  return ordered.findIndex((student) => getStreamRating(student.id) === rating) + 1;
+}
+
+function renderLeaderboard(title, description, students, activeStudent, showClass = false) {
+  if (!students.length) return `<section class="leaderboard-section"><div class="section-heading"><div><h2>${title}</h2><p>${description}</p></div></div>${emptyState("No students yet", "Rankings will appear when students join this group.")}</section>`;
+
+  let previousRating = null;
+  let previousRank = 0;
+  const rows = rankedStudents(students).map((student, index) => {
+    const rating = getStreamRating(student.id);
+    const rank = rating === previousRating ? previousRank : index + 1;
+    previousRating = rating;
+    previousRank = rank;
+    const current = student.id === activeStudent.id;
+    return `<tr class="${current ? "leaderboard-current" : ""}"><td><span class="rank-number ${rank <= 3 ? "rank-top" : ""}">${rank}</span></td><td><div class="leaderboard-player"><span class="avatar ${rank === 1 ? "gold" : ""}">${escapeHtml(student.name.slice(0, 1))}</span><strong>${escapeHtml(student.name)}</strong>${current ? '<span class="you-tag">You</span>' : ""}</div></td>${showClass ? `<td><span class="class-label">${escapeHtml(student.className)}</span></td>` : ""}<td><strong class="leaderboard-rating">${rating}</strong><span class="small"> ELO</span></td></tr>`;
+  }).join("");
+  const classHeader = showClass ? "<th>Class</th>" : "";
+  return `<section class="leaderboard-section"><div class="section-heading"><div><h2>${title}</h2><p>${description}</p></div><span class="leaderboard-count">${students.length} ${students.length === 1 ? "student" : "students"}</span></div><div class="table-wrap leaderboard-wrap"><table class="leaderboard-table"><thead><tr><th>Rank</th><th>Student</th>${classHeader}<th>Rating</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+}
+
+function renderStudentLeaderboards(student) {
+  const streamStudents = state.users.filter((user) => user.role === "student" && user.stream === student.stream);
+  const classStudents = streamStudents.filter((user) => user.className === student.className);
+  const streamRank = studentRank(streamStudents, student.id);
+  const classRank = studentRank(classStudents, student.id);
+  return `<div class="leaderboard-intro"><div><p class="eyebrow">YOUR CLASSROOM COMMUNITY</p><h2>${escapeHtml(student.className)} <span>·</span> ${escapeHtml(student.stream)}</h2><p>See how your class is doing and compare your rating with everyone in your teacher’s stream. Duels can match you with any eligible student in the stream.</p></div><div class="rank-summary"><div><span>Your class rank</span><strong>#${classRank || "—"}</strong></div><div><span>Stream rank</span><strong>#${streamRank || "—"}</strong></div></div></div>${renderLeaderboard("Your class", `Students in ${escapeHtml(student.className)} · ratings use the shared stream ELO.`, classStudents, student)}${renderLeaderboard("Teacher’s stream", `All classes in ${escapeHtml(student.stream)} · opponents may come from another class.`, streamStudents, student, true)}`;
+}
+
 function studentPerformance(student) {
   const completed = matchesForStudent(student).filter((battle) => ["done", "forfeit", "void"].includes(battle.status));
   const scoredMatches = completed.filter((battle) => battle.attempts[student.id].submitted);
@@ -380,9 +417,10 @@ function renderStudent(student) {
   app.innerHTML = `${pageHeading(`STUDENT · ${escapeHtml(student.className)}`, `Welcome back, ${escapeHtml(student.name)}.`, "Pick a chapter, challenge someone from your stream, and use every match as a chance to learn.")}
     <section class="hero-banner" aria-label="Student overview"><div class="hero-copy"><p class="eyebrow">YOUR LEARNING ARENA</p><h2>Small rounds. Stronger recall.</h2><p>Play a few ranked matches, then revisit the full chapter at your own pace.</p></div><div class="hero-side"><span class="hero-side-label">Ranked matches played</span><strong class="hero-side-number">${performance.completed.length}</strong><span class="hero-side-note">Each chapter set has its own three-match limit.</span></div></section>
     <div class="stats-grid student-stats">${statCard("⚔", performance.completed.length, "Matches resolved")}${statCard("✦", performance.wins, "Wins")}${statCard("✓", `${performance.correct} / ${performance.total}`, "Correct answers")}${statCard("◈", `${getStreamRating(student.id)} ELO`, "Stream rating")}</div>
-    <nav class="tab-bar" aria-label="Student sections"><button class="tab-button active" data-tab="play">Play</button><button class="tab-button" data-tab="challenges">Challenges <span class="tab-count">${pending.length}</span></button><button class="tab-button" data-tab="practice">Practice</button><button class="tab-button" data-tab="history">Match history</button></nav>
-    <section class="tab-panel active" id="panel-play"><div class="section-heading"><div><h2>Choose a chapter</h2><p>Your opponent can be from any class in ${escapeHtml(student.stream)}.</p></div></div><div class="card-grid">${sets.map((questionSet) => renderStudentSet(questionSet, student)).join("") || emptyState("No chapters available yet", "Your teacher’s published chapters will show up here.")}</div><div class="section-heading"><div><h2>Your active matches</h2><p>Finish your answers now or come back later.</p></div></div>${renderBattleList(pending, student)}</section>
+    <nav class="tab-bar" aria-label="Student sections"><button class="tab-button active" data-tab="play">Play</button><button class="tab-button" data-tab="challenges">Challenges <span class="tab-count">${pending.length}</span></button><button class="tab-button" data-tab="leaderboard">Class & rankings</button><button class="tab-button" data-tab="practice">Practice</button><button class="tab-button" data-tab="history">Match history</button></nav>
+    <section class="tab-panel active" id="panel-play"><div class="section-heading"><div><h2>Choose a chapter</h2><p>Face any student in ${escapeHtml(student.stream)} whose class has access to the chapter.</p></div></div><div class="card-grid">${sets.map((questionSet) => renderStudentSet(questionSet, student)).join("") || emptyState("No chapters available yet", "Your teacher’s published chapters will show up here.")}</div><div class="section-heading"><div><h2>Your active matches</h2><p>Finish your answers now or come back later.</p></div></div>${renderBattleList(pending, student)}</section>
     <section class="tab-panel" id="panel-challenges"><div class="section-heading"><div><h2>Challenges</h2><p>Accept an incoming match or finish one you already started.</p></div></div>${renderBattleList(pending, student)}</section>
+    <section class="tab-panel" id="panel-leaderboard">${renderStudentLeaderboards(student)}</section>
     <section class="tab-panel" id="panel-practice"><div class="section-heading"><div><h2>Practice without pressure</h2><p>Review the entire chapter. Practice never changes ranked results.</p></div></div><div class="card-grid">${sets.map((questionSet) => `<article class="surface-card set-card"><div class="set-card-top"><span class="subject-tag">${escapeHtml(questionSet.subject)}</span><span class="state-tag">No rating</span></div><span class="set-icon" aria-hidden="true">↻</span><h3>${escapeHtml(questionSet.title)}</h3><p class="set-meta">${questionSet.questions.length} questions · self-paced</p><div class="set-card-footer"><span class="small">Review the full chapter</span><button class="button button-secondary" data-practice-set="${escapeHtml(questionSet.id)}">Start practice</button></div></article>`).join("") || emptyState("Nothing to review yet", "Published chapters will appear here.")}</div></section>
     <section class="tab-panel" id="panel-history"><div class="section-heading"><div><h2>Match history</h2><p>See your results and revisit the explanations.</p></div></div>${renderBattleList(matchesForStudent(student).filter((battle) => ["done", "forfeit", "void"].includes(battle.status)), student)}</section>`;
 

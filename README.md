@@ -12,16 +12,18 @@ Open `index.html` in a modern browser. The prototype has no build step or depend
 2. Switch to **Vasya · Grade 11B** and select **Find an opponent** to send a challenge.
 3. Switch to **Sasha · Grade 11A**, accept the challenge, and submit answers.
 4. Switch back to Vasya, continue the match, and submit answers. Both students can then view the result.
-5. Switch to the teacher profile to see the results table.
+5. Open **Class & rankings** from a student profile to view classmates and compare class and teacher-stream ELO rankings.
+6. Switch to the teacher profile to see the results table.
 
 The profile picker simulates separate accounts on one device. **SCHOLA11** is a display-only invitation code; it does not create real accounts.
 
 ## In the prototype
 
-- Responsive teacher and student dashboards with an English interface.
+- Responsive teacher and student dashboards with an English interface, larger controls, and clearer reading sizes.
 - Manual chapter creation, draft saving, editing, and publishing.
 - A 15-question minimum per ranked chapter.
 - Random opponent selection across the teacher’s included classes.
+- Student class view with separate class and teacher-stream leaderboards, both ordered by the shared stream ELO rating.
 - Asynchronous matches with the same random question sample for both students.
 - Up to three accepted ranked matches per chapter. An open invitation does not use a match; accepting it does.
 - Invitations expire after three hours if they are not accepted.
