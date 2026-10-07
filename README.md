@@ -1,36 +1,36 @@
 # Schola Clash prototype
 
-A lightweight browser prototype for reviewing school material through asynchronous student duels.
+An English-language, Kazakhstan-focused classroom review prototype. Teachers create approved chapters, and students challenge classmates asynchronously before practising the full chapter.
 
-## Run locally
+## Run
 
-Open `index.html` in a modern browser. No dependencies or build step are required.
+Open `index.html` in a modern browser. The prototype has no build step or dependencies. Data is saved in browser `localStorage` under `schola-clash-prototype-v2`.
 
-Use the profile switcher in the top-right corner to walk through the demo:
+## Demo flow
 
-1. Open the teacher profile and open the **World War I** question set. It contains 15 sample questions.
-2. Switch to **Vasya** and choose **Find an opponent**.
-3. Answer the five questions in the match.
-4. Switch to **Sasha**, open **Challenges**, and accept the match.
-5. After Sasha submits answers, both students and the teacher can see the result.
+1. Open the **Marina Ivanova · Teacher** profile. The sample **World War I** chapter has 15 questions and is available to Grade 11A and Grade 11B.
+2. Switch to **Vasya · Grade 11B**, select **Find an opponent**, and complete the five-question match.
+3. Switch to **Sasha · Grade 11A**, open **Challenges**, accept the match, and submit answers.
+4. View the result as either student, then switch to the teacher profile to see the results table.
 
-Vasya and Sasha are in parallel classes, Grade 11B and Grade 11A, within the same teacher stream. The teacher can add more demo profiles and create question sets manually.
+The profile picker simulates separate accounts on one device. **SCHOLA11** is a display-only invitation code; it does not create real accounts.
 
-## Included
+## In the prototype
 
-- Teacher and student roles, demo classes, and profile switching.
-- Manual question set creation and editing with four answer options.
-- A 15-question minimum to publish a set for ranked matches.
-- Opponent matching across parallel classes in the same stream.
-- Asynchronous duels with the same random sample of at least five questions and a three-match limit per set.
-- Match results, explanations, match history, and a teacher results table.
-- A separate full-set practice mode that does not affect ranked results.
-- Browser-local persistence with `localStorage`.
+- Responsive teacher and student dashboards with an English interface.
+- Manual chapter creation, draft saving, editing, and publishing.
+- A 15-question minimum per ranked chapter.
+- Random opponent selection across the teacher’s included classes.
+- Asynchronous matches with the same random question sample for both students.
+- Up to three accepted ranked matches per chapter. An open invitation does not use a match; accepting it does.
+- Invitations expire after three hours if they are not accepted.
+- One ELO rating per teacher stream, updated after a match using correct answers (K = 32). In a draw, a lower-rated student gains rating and the higher-rated student loses the same amount.
+- Separate full-chapter practice that does not affect ranked results.
+- Answer explanations, student match history, and a teacher results summary.
+- Local persistence in the browser.
 
-## Prototype limits
+## Not implemented
 
-This is a local demo. Profiles and matches run in one browser on one device. The stream invite code (`SCHOLA11`) is a UI placeholder and is not connected to account authentication. Data is saved only in the current browser.
+There is no server, sign-in, cross-device data, real invite-code flow, photo or document upload, OCR, LLM question generation, or real-time match. Speed does not affect ranked scores. The demo uses local profiles and sample questions only, so its ELO and results exist only in this browser.
 
-Photo uploads, OCR, LLM question generation, live matches, a backend, cross-device sync, and ELO are not implemented yet. The next step toward a multi-user version is an API and shared database, followed by real invite-code sign-in and match synchronization.
-
-To restore the sample data, clear this page's site data or delete the `krug-prototype-v1` key from `localStorage` in browser developer tools.
+For a fresh demo, clear this page’s site data or delete `schola-clash-prototype-v2` from `localStorage` in browser developer tools.
