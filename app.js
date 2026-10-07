@@ -2,6 +2,7 @@ const STORAGE_KEY = "schola-clash-prototype-v2";
 const ANSWER_LABELS = ["A", "B", "C", "D"];
 const DEMO_STREAM = "Marina’s classes";
 const CHALLENGE_TTL_MS = 3 * 60 * 60 * 1000;
+const MATCH_TTL_MS = 24 * 60 * 60 * 1000;
 const ELO_K_FACTOR = 32;
 
 const sampleQuestions = [
@@ -58,22 +59,42 @@ state.users.forEach((user) => {
   user.streamRatings ||= {};
   if (user.role === "student") user.streamRatings[user.stream] ??= Number.isFinite(user.elo) ? user.elo : 1000;
 });
+let stateMigrated = false;
 state.battles.forEach((battle) => {
   // Migrate invitations created by the earlier prototype version.
-  if (battle.status === "active" && battle.pendingFor) battle.status = "pending";
+  if (battle.status === "active" && battle.pendingFor) {
+    battle.status = "pending";
+    stateMigrated = true;
+  } else if (battle.status === "active") {
+    battle.acceptedAt ||= Date.now();
+    battle.deadlineAt ||= battle.acceptedAt + MATCH_TTL_MS;
+    stateMigrated = true;
+  } else if (battle.status === "done") {
+    battle.acceptedAt ||= battle.createdAt || Date.now();
+  }
+  battle.participants.forEach((userId) => {
+    const attempt = battle.attempts?.[userId];
+    if (!attempt || !Array.isArray(battle.questions)) return;
+    if (!Array.isArray(attempt.optionOrders) || attempt.optionOrders.length !== battle.questions.length) {
+      attempt.optionOrders = battle.questions.map((question) => question.options.map((_, index) => index));
+      stateMigrated = true;
+    }
+  });
 });
-expirePendingChallenges();
+if (stateMigrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+processBattleDeadlines();
 const app = document.getElementById("app");
 const userSelect = document.getElementById("userSelect");
 const roleBadge = document.getElementById("roleBadge");
 const modalBackdrop = document.getElementById("modalBackdrop");
 const modal = document.getElementById("modal");
+let activeBattleId = null;
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
-function expirePendingChallenges(now = Date.now()) {
+function processBattleDeadlines(now = Date.now()) {
   let changed = false;
   state.battles.forEach((battle) => {
     const createdAt = Number(battle.createdAt);
@@ -81,7 +102,28 @@ function expirePendingChallenges(now = Date.now()) {
       battle.status = "expired";
       battle.pendingFor = null;
       changed = true;
+      return;
     }
+
+    if (battle.status !== "active" || Number(battle.deadlineAt) > now) return;
+    const [firstId, secondId] = battle.participants;
+    const firstSubmitted = Boolean(battle.attempts[firstId]?.submitted);
+    const secondSubmitted = Boolean(battle.attempts[secondId]?.submitted);
+    if (firstSubmitted && secondSubmitted) {
+      battle.status = "done";
+      const firstScore = calculateScore(battle, firstId);
+      const secondScore = calculateScore(battle, secondId);
+      battle.winner = firstScore === secondScore ? null : firstScore > secondScore ? firstId : secondId;
+      updateStreamRatings(battle);
+    } else if (firstSubmitted || secondSubmitted) {
+      battle.status = "forfeit";
+      battle.winner = firstSubmitted ? firstId : secondId;
+      battle.forfeitBy = firstSubmitted ? secondId : firstId;
+    } else {
+      battle.status = "void";
+      battle.winner = null;
+    }
+    changed = true;
   });
   if (changed) saveState();
   return changed;
@@ -121,6 +163,7 @@ function openModal(html) {
 }
 
 function closeModal() {
+  activeBattleId = null;
   modalBackdrop.classList.remove("show");
   modalBackdrop.setAttribute("aria-hidden", "true");
   modal.innerHTML = "";
@@ -143,6 +186,7 @@ function updateProfilePicker() {
 }
 
 function render() {
+  processBattleDeadlines();
   updateProfilePicker();
   const person = currentUser();
   if (!person) return;
@@ -166,8 +210,8 @@ function statCard(icon, value, label) {
 
 function teacherStats(person, students, sets) {
   const published = sets.filter((questionSet) => questionSet.published).length;
-  const completedMatches = state.battles.filter((battle) => battle.status === "done" && battle.participants.some((id) => students.some((student) => student.id === id))).length;
-  return `<div class="stats-grid">${statCard("▤", published, "Published chapters")}${statCard("♙", students.length, "Students in your stream")}${statCard("⚔", completedMatches, "Completed ranked matches")}</div>`;
+  const completedMatches = state.battles.filter((battle) => ["done", "forfeit", "void"].includes(battle.status) && battle.participants.some((id) => students.some((student) => student.id === id))).length;
+  return `<div class="stats-grid">${statCard("▤", published, "Published chapters")}${statCard("♙", students.length, "Students in your stream")}${statCard("⚔", completedMatches, "Resolved ranked matches")}</div>`;
 }
 
 function renderTeacher(person) {
@@ -206,11 +250,12 @@ function renderTeacherResults(students, sets) {
   if (!sets.length || !students.length) return emptyState("Results will appear here", "Publish a chapter and invite students to start collecting ranked match results.");
 
   const rows = students.map((student) => {
-    const battles = state.battles.filter((battle) => battle.status === "done" && battle.participants.includes(student.id) && sets.some((questionSet) => questionSet.id === battle.setId));
-    const correct = battles.reduce((total, battle) => total + battle.attempts[student.id].answers.filter((answer, index) => answer === battle.questions[index].correct).length, 0);
-    const total = battles.reduce((sum, battle) => sum + battle.questions.length, 0);
-    const wins = battles.filter((battle) => battle.winner === student.id).length;
-    return `<tr><td><strong>${escapeHtml(student.name)}</strong><div class="small">${escapeHtml(student.className)}</div></td><td>${getStreamRating(student.id)} ELO</td><td>${battles.length}</td><td><strong>${correct} / ${total}</strong></td><td>${wins}</td></tr>`;
+    const matches = state.battles.filter((battle) => ["done", "forfeit", "void"].includes(battle.status) && battle.participants.includes(student.id) && sets.some((questionSet) => questionSet.id === battle.setId));
+    const scoredMatches = matches.filter((battle) => battle.attempts[student.id].submitted);
+    const correct = scoredMatches.reduce((total, battle) => total + calculateScore(battle, student.id), 0);
+    const total = scoredMatches.reduce((sum, battle) => sum + battle.questions.length, 0);
+    const wins = matches.filter((battle) => battle.winner === student.id).length;
+    return `<tr><td><strong>${escapeHtml(student.name)}</strong><div class="small">${escapeHtml(student.className)}</div></td><td>${getStreamRating(student.id)} ELO</td><td>${matches.length}</td><td><strong>${correct} / ${total}</strong></td><td>${wins}</td></tr>`;
   }).join("");
 
   return `<div class="table-wrap"><table><thead><tr><th>Student</th><th>Stream rating</th><th>Ranked matches</th><th>Correct answers</th><th>Wins</th></tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -311,7 +356,7 @@ function matchesForStudent(student, status) {
 }
 
 function rankedMatchCount(studentId, setId) {
-  return state.battles.filter((battle) => battle.setId === setId && battle.participants.includes(studentId) && ["active", "done"].includes(battle.status)).length;
+  return state.battles.filter((battle) => battle.setId === setId && battle.participants.includes(studentId) && (battle.acceptedAt || ["active", "done", "forfeit", "void"].includes(battle.status))).length;
 }
 
 function getStreamRating(studentId) {
@@ -320,10 +365,11 @@ function getStreamRating(studentId) {
 }
 
 function studentPerformance(student) {
-  const completed = matchesForStudent(student, "done");
+  const completed = matchesForStudent(student).filter((battle) => ["done", "forfeit", "void"].includes(battle.status));
+  const scoredMatches = completed.filter((battle) => battle.attempts[student.id].submitted);
   const wins = completed.filter((battle) => battle.winner === student.id).length;
-  const correct = completed.reduce((sum, battle) => sum + battle.attempts[student.id].answers.filter((answer, index) => answer === battle.questions[index].correct).length, 0);
-  const total = completed.reduce((sum, battle) => sum + battle.questions.length, 0);
+  const correct = scoredMatches.reduce((sum, battle) => sum + calculateScore(battle, student.id), 0);
+  const total = scoredMatches.reduce((sum, battle) => sum + battle.questions.length, 0);
   return { completed, wins, correct, total };
 }
 
@@ -333,12 +379,12 @@ function renderStudent(student) {
   const performance = studentPerformance(student);
   app.innerHTML = `${pageHeading(`STUDENT · ${escapeHtml(student.className)}`, `Welcome back, ${escapeHtml(student.name)}.`, "Pick a chapter, challenge someone from your stream, and use every match as a chance to learn.")}
     <section class="hero-banner" aria-label="Student overview"><div class="hero-copy"><p class="eyebrow">YOUR LEARNING ARENA</p><h2>Small rounds. Stronger recall.</h2><p>Play a few ranked matches, then revisit the full chapter at your own pace.</p></div><div class="hero-side"><span class="hero-side-label">Ranked matches played</span><strong class="hero-side-number">${performance.completed.length}</strong><span class="hero-side-note">Each chapter set has its own three-match limit.</span></div></section>
-    <div class="stats-grid student-stats">${statCard("⚔", performance.completed.length, "Matches completed")}${statCard("✦", performance.wins, "Wins")}${statCard("✓", `${performance.correct} / ${performance.total}`, "Correct answers")}${statCard("◈", `${getStreamRating(student.id)} ELO`, "Stream rating")}</div>
+    <div class="stats-grid student-stats">${statCard("⚔", performance.completed.length, "Matches resolved")}${statCard("✦", performance.wins, "Wins")}${statCard("✓", `${performance.correct} / ${performance.total}`, "Correct answers")}${statCard("◈", `${getStreamRating(student.id)} ELO`, "Stream rating")}</div>
     <nav class="tab-bar" aria-label="Student sections"><button class="tab-button active" data-tab="play">Play</button><button class="tab-button" data-tab="challenges">Challenges <span class="tab-count">${pending.length}</span></button><button class="tab-button" data-tab="practice">Practice</button><button class="tab-button" data-tab="history">Match history</button></nav>
     <section class="tab-panel active" id="panel-play"><div class="section-heading"><div><h2>Choose a chapter</h2><p>Your opponent can be from any class in ${escapeHtml(student.stream)}.</p></div></div><div class="card-grid">${sets.map((questionSet) => renderStudentSet(questionSet, student)).join("") || emptyState("No chapters available yet", "Your teacher’s published chapters will show up here.")}</div><div class="section-heading"><div><h2>Your active matches</h2><p>Finish your answers now or come back later.</p></div></div>${renderBattleList(pending, student)}</section>
     <section class="tab-panel" id="panel-challenges"><div class="section-heading"><div><h2>Challenges</h2><p>Accept an incoming match or finish one you already started.</p></div></div>${renderBattleList(pending, student)}</section>
     <section class="tab-panel" id="panel-practice"><div class="section-heading"><div><h2>Practice without pressure</h2><p>Review the entire chapter. Practice never changes ranked results.</p></div></div><div class="card-grid">${sets.map((questionSet) => `<article class="surface-card set-card"><div class="set-card-top"><span class="subject-tag">${escapeHtml(questionSet.subject)}</span><span class="state-tag">No rating</span></div><span class="set-icon" aria-hidden="true">↻</span><h3>${escapeHtml(questionSet.title)}</h3><p class="set-meta">${questionSet.questions.length} questions · self-paced</p><div class="set-card-footer"><span class="small">Review the full chapter</span><button class="button button-secondary" data-practice-set="${escapeHtml(questionSet.id)}">Start practice</button></div></article>`).join("") || emptyState("Nothing to review yet", "Published chapters will appear here.")}</div></section>
-    <section class="tab-panel" id="panel-history"><div class="section-heading"><div><h2>Match history</h2><p>See your results and revisit the explanations.</p></div></div>${renderBattleList(matchesForStudent(student, "done"), student)}</section>`;
+    <section class="tab-panel" id="panel-history"><div class="section-heading"><div><h2>Match history</h2><p>See your results and revisit the explanations.</p></div></div>${renderBattleList(matchesForStudent(student).filter((battle) => ["done", "forfeit", "void"].includes(battle.status)), student)}</section>`;
 
   bindTabs();
   document.querySelectorAll("[data-challenge-set]").forEach((button) => button.addEventListener("click", () => createBattle(student, button.dataset.challengeSet)));
@@ -360,22 +406,25 @@ function renderBattleList(battles, student) {
     const otherId = battle.participants.find((id) => id !== student.id);
     const opponent = state.users.find((person) => person.id === otherId);
     const mine = battle.attempts[student.id];
+    const resolved = ["done", "forfeit", "void"].includes(battle.status);
     const status = battle.status === "done" ? "Completed"
-      : battle.status === "pending" ? `Invitation · expires in ${formatTimeRemaining(battle.createdAt)}`
-        : mine.submitted ? "You’re done · waiting for opponent" : "Your turn";
-    const action = battle.status === "done"
+      : battle.status === "forfeit" ? battle.winner === student.id ? "Won by forfeit" : "Lost by forfeit"
+        : battle.status === "void" ? "No contest · no submissions"
+          : battle.status === "pending" ? `Invitation · expires in ${formatTimeRemaining(battle.createdAt + CHALLENGE_TTL_MS)}`
+            : `${mine.submitted ? "Submitted · " : "Your turn · "}due in ${formatTimeRemaining(battle.deadlineAt)}`;
+    const action = resolved
       ? `<button class="button button-outline" data-open-result="${escapeHtml(battle.id)}">View result</button>`
       : battle.status === "pending" && battle.pendingFor === student.id
         ? `<button class="button button-secondary" data-accept-battle="${escapeHtml(battle.id)}">Accept challenge</button>`
         : battle.status === "pending"
           ? `<button class="button button-outline" data-cancel-challenge="${escapeHtml(battle.id)}">Cancel invite</button>`
           : `<button class="button ${mine.submitted ? "button-outline" : "button-primary"}" data-open-battle="${escapeHtml(battle.id)}" ${mine.submitted ? "disabled" : ""}>${mine.submitted ? "Waiting" : "Continue"}</button>`;
-    return `<article class="surface-card challenge-card"><div class="player-block"><span class="avatar ${battle.status === "done" ? "gold" : ""}">${escapeHtml(opponent?.name.slice(0, 1) || "?")}</span><div class="player-copy"><strong>${escapeHtml(opponent?.name || "Opponent")} · ${escapeHtml(set?.title || "Chapter")}</strong><span class="small">${escapeHtml(opponent?.className || "")} · ${battle.questions.length} questions · ${status}</span></div></div>${action}</article>`;
+    return `<article class="surface-card challenge-card"><div class="player-block"><span class="avatar ${resolved ? "gold" : ""}">${escapeHtml(opponent?.name.slice(0, 1) || "?")}</span><div class="player-copy"><strong>${escapeHtml(opponent?.name || "Opponent")} · ${escapeHtml(set?.title || "Chapter")}</strong><span class="small">${escapeHtml(opponent?.className || "")} · ${battle.questions.length} questions · ${status}</span></div></div>${action}</article>`;
   }).join("");
 }
 
-function formatTimeRemaining(createdAt) {
-  const remaining = Math.max(0, CHALLENGE_TTL_MS - (Date.now() - createdAt));
+function formatTimeRemaining(deadlineAt) {
+  const remaining = Math.max(0, deadlineAt - Date.now());
   const hours = Math.floor(remaining / (60 * 60 * 1000));
   const minutes = Math.ceil((remaining % (60 * 60 * 1000)) / (60 * 1000));
   return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
@@ -389,7 +438,7 @@ function bindBattleList(student) {
 }
 
 function createBattle(student, setId) {
-  expirePendingChallenges();
+  if (processBattleDeadlines()) render();
   const set = findSet(setId);
   if (!set || rankedMatchCount(student.id, setId) >= 3) return showToast("You have used all three ranked matches for this chapter.");
   const existingInvite = state.battles.some((battle) => battle.setId === setId && battle.status === "pending" && battle.participants.includes(student.id));
@@ -400,11 +449,13 @@ function createBattle(student, setId) {
   const opponent = eligibleOpponents[Math.floor(Math.random() * eligibleOpponents.length)];
   const matchSize = Math.min(set.questions.length, Math.max(5, Math.floor(set.questions.length / 3)));
   const selectedQuestions = sampleWithoutReplacement(set.questions, matchSize).map((question) => ({ text: question[0], options: [...question[1]], correct: question[2], explanation: question[3] || "" }));
-  const answers = () => ({ answers: Array(selectedQuestions.length).fill(null), submitted: false });
+  const firstOptionOrders = createOptionOrders(selectedQuestions);
+  const secondOptionOrders = createOptionOrders(selectedQuestions, firstOptionOrders);
+  const answers = (optionOrders) => ({ answers: Array(selectedQuestions.length).fill(null), submitted: false, optionOrders });
   const battle = {
     id: makeId(), setId, participants: [student.id, opponent.id], pendingFor: opponent.id,
     status: "pending", questions: selectedQuestions,
-    attempts: { [student.id]: answers(), [opponent.id]: answers() },
+    attempts: { [student.id]: answers(firstOptionOrders), [opponent.id]: answers(secondOptionOrders) },
     createdAt: Date.now(), winner: null,
   };
   state.battles.unshift(battle);
@@ -422,8 +473,26 @@ function sampleWithoutReplacement(items, count) {
   return pool.slice(0, count);
 }
 
+function createOptionOrders(questions, differentFrom = []) {
+  let previousCorrectSlot = -1;
+  return questions.map((question, questionIndex) => {
+    const optionIndices = question.options.map((_, index) => index);
+    const forbiddenSlots = new Set();
+    const otherCorrectSlot = differentFrom[questionIndex]?.indexOf(question.correct) ?? -1;
+    if (otherCorrectSlot >= 0) forbiddenSlots.add(otherCorrectSlot);
+    if (previousCorrectSlot >= 0) forbiddenSlots.add(previousCorrectSlot);
+    const availableSlots = optionIndices.filter((index) => !forbiddenSlots.has(index));
+    const correctSlot = availableSlots[Math.floor(Math.random() * availableSlots.length)];
+    const distractors = sampleWithoutReplacement(optionIndices.filter((index) => index !== question.correct), optionIndices.length - 1);
+    let distractorIndex = 0;
+    const order = optionIndices.map((slot) => slot === correctSlot ? question.correct : distractors[distractorIndex++]);
+    previousCorrectSlot = correctSlot;
+    return order;
+  });
+}
+
 function acceptBattle(battleId, student) {
-  expirePendingChallenges();
+  if (processBattleDeadlines()) render();
   const battle = state.battles.find((item) => item.id === battleId);
   if (!battle || battle.status !== "pending" || battle.pendingFor !== student.id) return showToast("This invitation has expired or is no longer available.");
   const hasRoom = battle.participants.every((userId) => rankedMatchCount(userId, battle.setId) < 3);
@@ -436,11 +505,14 @@ function acceptBattle(battleId, student) {
   }
   battle.pendingFor = null;
   battle.status = "active";
+  battle.acceptedAt = Date.now();
+  battle.deadlineAt = battle.acceptedAt + MATCH_TTL_MS;
   saveState();
   openBattle(battleId, student);
 }
 
 function cancelChallenge(battleId, student) {
+  if (processBattleDeadlines()) render();
   const battle = state.battles.find((item) => item.id === battleId);
   if (!battle || battle.status !== "pending" || battle.pendingFor === student.id) return;
   battle.status = "cancelled";
@@ -451,20 +523,33 @@ function cancelChallenge(battleId, student) {
 }
 
 function openBattle(battleId, student) {
+  if (processBattleDeadlines()) render();
   const battle = state.battles.find((item) => item.id === battleId);
   if (!battle || !battle.attempts[student.id]) return showToast("This match belongs to another profile.");
-  if (battle.status === "done") return showBattleResult(battle, student);
+  if (["done", "forfeit", "void"].includes(battle.status)) return showBattleResult(battle, student);
   if (battle.pendingFor === student.id) return showToast("Accept the challenge before playing.");
   const attempt = battle.attempts[student.id];
   if (attempt.submitted) return showToast("Your answers are saved. Waiting for your opponent.");
 
   const set = findSet(battle.setId);
+  activeBattleId = battleId;
+  const playerQuestions = battle.questions.map((question, index) => {
+    const order = attempt.optionOrders?.[index] || question.options.map((_, optionIndex) => optionIndex);
+    return { ...question, options: order.map((optionIndex) => question.options[optionIndex]), correct: order.indexOf(question.correct) };
+  });
   openQuiz({
     title: set?.title || "Ranked match",
-    questions: battle.questions,
+    questions: playerQuestions,
     initialAnswers: attempt.answers,
     isPractice: false,
+    deadlineAt: battle.deadlineAt,
     onFinish: (answers) => {
+      if (Date.now() >= battle.deadlineAt) {
+        processBattleDeadlines();
+        closeModal();
+        render();
+        return showBattleResult(battle, student);
+      }
       attempt.answers = answers;
       attempt.submitted = true;
       const otherId = battle.participants.find((id) => id !== student.id);
@@ -485,7 +570,12 @@ function openBattle(battleId, student) {
 }
 
 function calculateScore(battle, userId) {
-  return battle.attempts[userId].answers.filter((answer, index) => answer === battle.questions[index].correct).length;
+  const attempt = battle.attempts[userId];
+  return attempt.answers.reduce((score, answer, index) => {
+    if (answer === null) return score;
+    const optionOrder = attempt.optionOrders?.[index] || battle.questions[index].options.map((_, optionIndex) => optionIndex);
+    return score + (optionOrder[answer] === battle.questions[index].correct ? 1 : 0);
+  }, 0);
 }
 
 function updateStreamRatings(battle) {
@@ -516,27 +606,52 @@ function formatRatingChange(change) {
   return change > 0 ? `+${change}` : String(change);
 }
 
+function showOpenBattleDeadlineResult() {
+  if (!activeBattleId) return;
+  const battle = state.battles.find((item) => item.id === activeBattleId);
+  if (!battle || !["forfeit", "void", "done"].includes(battle.status)) return;
+  const student = currentUser();
+  closeModal();
+  render();
+  if (student?.role === "student" && battle.participants.includes(student.id)) showBattleResult(battle, student);
+}
+
 function showBattleResult(battle, student) {
-  if (!battle || battle.status !== "done") return;
+  if (!battle || !["done", "forfeit", "void"].includes(battle.status)) return;
   const opponentId = battle.participants.find((id) => id !== student.id);
   const opponent = state.users.find((person) => person.id === opponentId);
-  const ownScore = calculateScore(battle, student.id);
-  const opponentScore = calculateScore(battle, opponentId);
-  const headline = battle.winner === student.id ? "A well-earned win!" : battle.winner === opponentId ? "Your opponent won this round." : "A draw. Nice match.";
+  const ownAttempt = battle.attempts[student.id];
+  const opponentAttempt = battle.attempts[opponentId];
+  const ownScore = ownAttempt.submitted ? `${calculateScore(battle, student.id)} / ${battle.questions.length}` : "No submission";
+  const opponentScore = opponentAttempt.submitted ? `${calculateScore(battle, opponentId)} / ${battle.questions.length}` : "No submission";
+  const headline = battle.status === "void" ? "No contest. Neither player submitted."
+    : battle.status === "forfeit" ? battle.winner === student.id ? "You won by forfeit." : "You forfeited this match."
+      : battle.winner === student.id ? "A well-earned win!" : battle.winner === opponentId ? "Your opponent won this round." : "A draw. Nice match.";
   const ratingSummary = battle.ratingApplied
     ? `<div class="rating-summary"><strong>Stream ELO</strong><span>${escapeHtml(student.name)}: ${battle.ratingBefore[student.id]} → ${battle.ratingBefore[student.id] + battle.ratingChanges[student.id]} (${formatRatingChange(battle.ratingChanges[student.id])})</span><span>${escapeHtml(opponent?.name || "Opponent")}: ${battle.ratingBefore[opponentId]} → ${battle.ratingBefore[opponentId] + battle.ratingChanges[opponentId]} (${formatRatingChange(battle.ratingChanges[opponentId])})</span></div>`
-    : "";
-  const review = battle.questions.map((question, index) => {
-    const correct = battle.attempts[student.id].answers[index] === question.correct;
-    return `<div class="answer-review"><strong class="${correct ? "is-correct" : "is-incorrect"}">${correct ? "✓" : "×"} ${index + 1}. ${escapeHtml(question.text)}</strong><span>Correct answer: ${ANSWER_LABELS[question.correct]} · ${escapeHtml(question.options[question.correct])}${question.explanation ? ` — ${escapeHtml(question.explanation)}` : ""}</span></div>`;
-  }).join("");
-  openModal(`<div class="modal-header"><div><p class="eyebrow">MATCH COMPLETE</p><h2 id="modalTitle">${headline}</h2></div><button class="button button-quiet" data-close-modal aria-label="Close dialog">✕</button></div><div class="result-summary"><div class="result-stat"><strong>${ownScore} / ${battle.questions.length}</strong><span>${escapeHtml(student.name)} · correct</span></div><div class="result-stat"><strong>${opponentScore} / ${battle.questions.length}</strong><span>${escapeHtml(opponent?.name || "Opponent")} · correct</span></div></div>${ratingSummary}${review}<div class="modal-footer"><span class="small">Review the explanations, then practice the full chapter.</span><button class="button button-primary" data-close-modal>Done</button></div>`);
+    : battle.status === "done" ? ""
+      : `<div class="rating-summary"><strong>Stream ELO unchanged</strong><span>Forfeits and no-contests do not affect ratings in this prototype.</span></div>`;
+  const review = ownAttempt.submitted ? battle.questions.map((question, index) => {
+    const order = ownAttempt.optionOrders?.[index] || question.options.map((_, optionIndex) => optionIndex);
+    const displayedOptions = order.map((optionIndex) => question.options[optionIndex]);
+    const correctIndex = order.indexOf(question.correct);
+    const correct = ownAttempt.answers[index] === correctIndex;
+    return `<div class="answer-review"><strong class="${correct ? "is-correct" : "is-incorrect"}">${correct ? "✓" : "×"} ${index + 1}. ${escapeHtml(question.text)}</strong><span>Correct answer: ${ANSWER_LABELS[correctIndex]} · ${escapeHtml(displayedOptions[correctIndex])}${question.explanation ? ` — ${escapeHtml(question.explanation)}` : ""}</span></div>`;
+  }).join("") : `<p class="small">No answers were submitted from your profile before the deadline.</p>`;
+  const resultLabel = battle.status === "void" ? "DEADLINE PASSED" : battle.status === "forfeit" ? "MATCH FORFEIT" : "MATCH COMPLETE";
+  openModal(`<div class="modal-header"><div><p class="eyebrow">${resultLabel}</p><h2 id="modalTitle">${headline}</h2></div><button class="button button-quiet" data-close-modal aria-label="Close dialog">✕</button></div><div class="result-summary"><div class="result-stat"><strong>${ownScore}</strong><span>${escapeHtml(student.name)}${ownAttempt.submitted ? " · correct" : ""}</span></div><div class="result-stat"><strong>${opponentScore}</strong><span>${escapeHtml(opponent?.name || "Opponent")}${opponentAttempt.submitted ? " · correct" : ""}</span></div></div>${ratingSummary}${review}<div class="modal-footer"><span class="small">Review what you answered, then practise the full chapter.</span><button class="button button-primary" data-close-modal>Done</button></div>`);
   document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
 }
 
 function startPractice(set) {
   if (!set) return;
-  const questions = set.questions.map((question) => ({ text: question[0], options: [...question[1]], correct: question[2], explanation: question[3] || "" }));
+  const sourceQuestions = set.questions.map((question) => ({ text: question[0], options: [...question[1]], correct: question[2], explanation: question[3] || "" }));
+  const optionOrders = createOptionOrders(sourceQuestions);
+  const questions = sourceQuestions.map((question, index) => ({
+    ...question,
+    options: optionOrders[index].map((optionIndex) => question.options[optionIndex]),
+    correct: optionOrders[index].indexOf(question.correct),
+  }));
   openQuiz({ title: set.title, questions, initialAnswers: Array(questions.length).fill(null), isPractice: true, onFinish: (answers) => {
     const correct = answers.filter((answer, index) => answer === questions[index].correct).length;
     openModal(`<div class="modal-header"><div><p class="eyebrow">PRACTICE COMPLETE</p><h2 id="modalTitle">Nice work. Keep the momentum.</h2></div><button class="button button-quiet" data-close-modal aria-label="Close dialog">✕</button></div><div class="result-score">${correct}<span> / ${questions.length} correct</span></div><p class="modal-description">This practice session does not affect ranked results. Try the questions you missed again later.</p><div class="modal-footer"><span class="small">Chapter · ${escapeHtml(set.title)}</span><button class="button button-primary" data-close-modal>Done</button></div>`);
@@ -544,12 +659,12 @@ function startPractice(set) {
   } });
 }
 
-function openQuiz({ title, questions, initialAnswers, isPractice, onFinish }) {
+function openQuiz({ title, questions, initialAnswers, isPractice, deadlineAt = null, onFinish }) {
   const answers = [...initialAnswers];
   let index = Math.max(0, answers.findIndex((answer) => answer === null));
   const paint = () => {
     const question = questions[index];
-    modal.innerHTML = `<div class="modal-header"><div><p class="eyebrow">${isPractice ? "PRACTICE MODE" : "ASYNC DUEL"}</p><h2 id="modalTitle">${escapeHtml(title)}</h2></div><button class="button button-quiet" id="leaveQuiz" aria-label="Close quiz">✕</button></div><div class="quiz-progress-head"><span>Question ${index + 1} of ${questions.length}</span><span>${isPractice ? "No rating" : "Ranked match"}</span></div><div class="progress-track" style="margin-top:9px"><div class="progress-fill" style="width:${(index + 1) / questions.length * 100}%"></div></div><h3 class="quiz-question">${escapeHtml(question.text)}</h3><div class="answer-list">${question.options.map((option, optionIndex) => `<button class="answer-option ${answers[index] === optionIndex ? "selected" : ""}" data-answer="${optionIndex}"><span class="answer-letter">${ANSWER_LABELS[optionIndex]}</span><span>${escapeHtml(option)}</span></button>`).join("")}</div><div class="quiz-footer"><button class="button button-outline" id="previousQuestion" ${index === 0 ? "disabled" : ""}>← Back</button><button class="button button-primary" id="nextQuestion">${index === questions.length - 1 ? isPractice ? "Finish practice" : "Submit answers" : "Next question →"}</button></div>`;
+    modal.innerHTML = `<div class="modal-header"><div><p class="eyebrow">${isPractice ? "PRACTICE MODE" : "ASYNC DUEL"}</p><h2 id="modalTitle">${escapeHtml(title)}</h2></div><button class="button button-quiet" id="leaveQuiz" aria-label="Close quiz">✕</button></div><div class="quiz-progress-head"><span>Question ${index + 1} of ${questions.length}</span><span id="matchDeadline" data-deadline="${deadlineAt || ""}">${isPractice ? "No rating" : deadlineAt ? `Due in ${formatTimeRemaining(deadlineAt)}` : "Ranked match"}</span></div><div class="progress-track" style="margin-top:9px"><div class="progress-fill" style="width:${(index + 1) / questions.length * 100}%"></div></div><h3 class="quiz-question">${escapeHtml(question.text)}</h3><div class="answer-list">${question.options.map((option, optionIndex) => `<button class="answer-option ${answers[index] === optionIndex ? "selected" : ""}" data-answer="${optionIndex}"><span class="answer-letter">${ANSWER_LABELS[optionIndex]}</span><span>${escapeHtml(option)}</span></button>`).join("")}</div><div class="quiz-footer"><button class="button button-outline" id="previousQuestion" ${index === 0 ? "disabled" : ""}>← Back</button><button class="button button-primary" id="nextQuestion">${index === questions.length - 1 ? isPractice ? "Finish practice" : "Submit answers" : "Next question →"}</button></div>`;
     document.getElementById("leaveQuiz").addEventListener("click", closeModal);
     document.querySelectorAll("[data-answer]").forEach((button) => button.addEventListener("click", () => {
       answers[index] = Number(button.dataset.answer);
@@ -581,12 +696,22 @@ window.addEventListener("storage", (event) => {
 });
 
 window.setInterval(() => {
-  const expired = expirePendingChallenges();
-  if (expired || state.battles.some((battle) => battle.status === "pending")) render();
+  const processed = processBattleDeadlines();
+  if (processed) showOpenBattleDeadlineResult();
+  const deadlineLabel = document.getElementById("matchDeadline");
+  if (deadlineLabel?.dataset.deadline) deadlineLabel.textContent = `Due in ${formatTimeRemaining(Number(deadlineLabel.dataset.deadline))}`;
+  if (processed || state.battles.some((battle) => ["pending", "active"].includes(battle.status))) render();
 }, 60_000);
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && expirePendingChallenges()) render();
+  if (document.visibilityState === "visible") {
+    if (processBattleDeadlines()) {
+      showOpenBattleDeadlineResult();
+      render();
+    }
+    const deadlineLabel = document.getElementById("matchDeadline");
+    if (deadlineLabel?.dataset.deadline) deadlineLabel.textContent = `Due in ${formatTimeRemaining(Number(deadlineLabel.dataset.deadline))}`;
+  }
 });
 
 render();

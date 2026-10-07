@@ -9,9 +9,10 @@ Open `index.html` in a modern browser. The prototype has no build step or depend
 ## Demo flow
 
 1. Open the **Marina Ivanova · Teacher** profile. The sample **World War I** chapter has 15 questions and is available to Grade 11A and Grade 11B.
-2. Switch to **Vasya · Grade 11B**, select **Find an opponent**, and complete the five-question match.
-3. Switch to **Sasha · Grade 11A**, open **Challenges**, accept the match, and submit answers.
-4. View the result as either student, then switch to the teacher profile to see the results table.
+2. Switch to **Vasya · Grade 11B** and select **Find an opponent** to send a challenge.
+3. Switch to **Sasha · Grade 11A**, accept the challenge, and submit answers.
+4. Switch back to Vasya, continue the match, and submit answers. Both students can then view the result.
+5. Switch to the teacher profile to see the results table.
 
 The profile picker simulates separate accounts on one device. **SCHOLA11** is a display-only invitation code; it does not create real accounts.
 
@@ -24,6 +25,8 @@ The profile picker simulates separate accounts on one device. **SCHOLA11** is a 
 - Asynchronous matches with the same random question sample for both students.
 - Up to three accepted ranked matches per chapter. An open invitation does not use a match; accepting it does.
 - Invitations expire after three hours if they are not accepted.
+- After acceptance, both players have 24 hours to submit. If only one submits, the other forfeits; if neither submits, the match ends as a no-contest. Forfeits and no-contests do not change ELO.
+- Answer choices are shuffled separately for each student; the correct answer appears under different letters for the two players. Choices also shuffle during practice.
 - One ELO rating per teacher stream, updated after a match using correct answers (K = 32). In a draw, a lower-rated student gains rating and the higher-rated student loses the same amount.
 - Separate full-chapter practice that does not affect ranked results.
 - Answer explanations, student match history, and a teacher results summary.
