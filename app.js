@@ -22,6 +22,7 @@ const sampleQuestions = [
   ["Which empire dissolved after the war?", ["The British Empire", "The Austro-Hungarian Empire", "The Spanish Empire", "The Portuguese Empire"], 1, "Austria-Hungary dissolved at the end of the war."],
   ["What was one cause of World War I?", ["Imperial competition among major powers", "The discovery of the Americas", "The Reformation", "The founding of the United Nations"], 0, "Competition for influence and colonies heightened tensions."],
 ];
+window.scholaSampleQuestions = sampleQuestions;
 
 function createInitialState() {
   return {
@@ -82,7 +83,6 @@ state.battles.forEach((battle) => {
   });
 });
 if (stateMigrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-processBattleDeadlines();
 const app = document.getElementById("app");
 const userSelect = document.getElementById("userSelect");
 const profilePicker = userSelect.closest(".profile-picker");
@@ -194,8 +194,8 @@ function paintSupabaseStatus() {
   }
 
   if (supabaseProfile) {
-    supabaseStatus.textContent = `Connected as ${supabaseProfile.display_name} · ${supabaseProfile.role} · demo data`;
-    supabaseStatus.title = "Signed in and profile loaded from Supabase. The dashboard data is still local demo data.";
+    supabaseStatus.textContent = `Connected · live ${supabaseProfile.role} workspace`;
+    supabaseStatus.title = `Signed in as ${supabaseProfile.display_name}. Classroom data is loaded from Supabase.`;
   } else {
     supabaseStatus.textContent = "Signed in · profile not loaded";
     supabaseStatus.title = supabaseProfileError || "No profile row was returned for this account.";
@@ -348,18 +348,20 @@ function updateProfilePicker() {
 }
 
 function render() {
-  processBattleDeadlines();
   updateProfilePicker();
   if (supabaseClient && !supabaseAuthReady) {
     app.innerHTML = `${pageHeading("SUPABASE", "Checking your account", "Restoring your sign-in before loading the demo workspace.")}<div class="empty-state"><strong>Connecting…</strong></div>`;
     return;
   }
   if (supabaseSession) {
-    const displayName = supabaseProfile?.display_name || supabaseSession.user.email || "your account";
-    app.innerHTML = `${pageHeading("SUPABASE ACCOUNT", `Welcome, ${escapeHtml(displayName)}`, "You are signed in with your own account. This screen uses the profile loaded from Supabase.")}
-      <section class="empty-state"><strong>${supabaseProfile ? `Account role: ${escapeHtml(supabaseProfile.role)}` : "Your account is signed in"}</strong><span>${supabaseProfile ? "Your profile was read from the database successfully." : `The profile could not be loaded: ${escapeHtml(supabaseProfileError || "no profile row was returned")}`}</span><p style="margin-top:14px">Classrooms, chapters, and matches are still demo data and are not shown as part of this account yet. Sign out to return to the local demo.</p></section>`;
+    if (window.ScholaLiveApp) {
+      window.ScholaLiveApp.render({ session: supabaseSession, profile: supabaseProfile, profileError: supabaseProfileError });
+      return;
+    }
+    app.innerHTML = `${pageHeading("SUPABASE", "Loading your classroom", "Connecting your account to the live workspace.")}<div class="empty-state"><strong>One moment…</strong></div>`;
     return;
   }
+  processBattleDeadlines();
   const person = currentUser();
   if (!person) return;
   person.role === "teacher" ? renderTeacher(person) : renderStudent(person);
@@ -898,6 +900,11 @@ function openQuiz({ title, questions, initialAnswers, isPractice, deadlineAt = n
   paint();
 }
 
+window.scholaShowToast = showToast;
+window.scholaOpenModal = openModal;
+window.scholaCloseModal = closeModal;
+window.scholaOpenQuiz = openQuiz;
+
 window.addEventListener("storage", (event) => {
   if (event.key === STORAGE_KEY) {
     state = loadState();
@@ -906,6 +913,11 @@ window.addEventListener("storage", (event) => {
 });
 
 window.setInterval(() => {
+  if (supabaseClient && !supabaseAuthReady) return;
+  if (supabaseSession) {
+    window.ScholaLiveApp?.refresh();
+    return;
+  }
   const processed = processBattleDeadlines();
   if (processed) showOpenBattleDeadlineResult();
   const deadlineLabel = document.getElementById("matchDeadline");
@@ -915,6 +927,11 @@ window.setInterval(() => {
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
+    if (supabaseClient && !supabaseAuthReady) return;
+    if (supabaseSession) {
+      window.ScholaLiveApp?.refresh();
+      return;
+    }
     if (processBattleDeadlines()) {
       showOpenBattleDeadlineResult();
       render();

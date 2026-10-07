@@ -2,7 +2,7 @@
 
 ## Where the project is now
 
-The browser prototype can demo teacher-created chapters and asynchronous duels, but its dashboard data is still local to one browser. The Supabase schema and duel RPCs are deployed to the connected project. The browser now supports email/password sign-in, student account creation, and loading the signed-in user's profile. Chapters, classes, and matches still need to move from demo storage to Supabase before shared data works end to end.
+The browser supports both a local demo and Supabase-backed student and teacher workspaces. The shared schema, invitation codes, atomic chapter publishing, challenges, matches, answer review, and stream ratings are deployed. The implementation is ready for a two-account pilot; permissions, teacher role assignment, and the complete cross-device flow still need to be exercised with real project accounts.
 
 ## 1. Lock and implement the duel rules — complete
 
@@ -17,13 +17,13 @@ The browser prototype can demo teacher-created chapters and asynchronous duels, 
 
 **Complete in prototype:** accepted-match counting, invitation expiry/cancellation, 24-hour symmetric match deadlines, forfeit and no-contest handling, stream ELO and tie handling, visible rating changes, and per-pupil answer shuffling.
 
-## 2. Build the shared classroom foundation — next
+## 2. Build the shared classroom foundation — implementation complete
 
 Replace browser-only state with a backend and shared database. Start with teacher and student accounts, teacher-owned streams and classes, and invitations to join. Store chapters, questions, publication state, challenges, attempts, answers, results, and match limits.
 
 Enforce roles and class access on the server. Keep answer keys private until both players submit. Make challenge acceptance, 24-hour deadlines, and the three-match limit safe when concurrent requests arrive. Keep question generation out of this milestone so the first backend can validate the core duel loop.
 
-**Done when:** two students using separate devices can join the same stream, see the same published chapter, finish the same asynchronous match at different times, and see the same result and stream rating.
+**Implementation done when:** the app can create a teacher space, issue class codes, accept students, publish chapters, and run matches through Supabase RPCs with row-level access rules. **Pilot check remaining:** two students on separate devices complete the full flow and independently see the same result and stream rating.
 
 ## 3. Improve learning after each duel
 
@@ -71,6 +71,6 @@ Consider online live duels only if pilot feedback supports them. Consider speed 
 
 ## Next work session
 
-1. Implement teacher sign-in, stream/class membership, and chapter publishing in the frontend.
-2. Wire challenge creation, acceptance, attempts, and ELO updates to the server-side RPCs.
-3. Verify the duel loop on two separate devices before adding OCR or AI generation.
+1. Assign trusted teacher access to the pilot teacher account in Supabase.
+2. Use separate teacher and student accounts to exercise class creation, joining, publishing, and match completion across devices.
+3. Gather teacher/student feedback, then prioritize missed-question practice and teacher progress summaries.

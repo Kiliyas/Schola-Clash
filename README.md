@@ -21,11 +21,19 @@ There is no build step or package install. The app loads Supabase JS from a CDN.
 5. Open **Class & rankings** from a student profile to view classmates and compare class and teacher-stream ELO rankings.
 6. Switch to the teacher profile to see the results table.
 
-The profile picker simulates separate accounts on one device. **SCHOLA11** is a display-only invitation code; it does not create real accounts.
+The profile picker simulates separate accounts on one device. **SCHOLA11** is a display-only invitation code; it does not create real accounts. Sign out of Supabase to return to this demo.
 
-The Supabase schema is deployed to the connected **Schola clash** project. Use **Sign in** in the header to sign in or create a student account; after signing in, the app reads that account's profile from Supabase. The prototype screens still use demo data; see [supabase/README.md](supabase/README.md) for the remaining integration work.
+## Live Supabase flow
 
-## In the prototype
+1. Use **Sign in** in the header to create or sign in to a student account.
+2. A trusted project administrator must assign teacher access before a teacher can create a teaching space. New sign-ups are always students.
+3. A teacher creates a stream and classes, generates a class code, then writes and publishes a chapter.
+4. Students join with the code, open an assigned published chapter, and challenge a classmate. Accepting an invitation creates a ranked match.
+5. Each student submits independently. Supabase scores the match and updates stream ELO after both submissions; either player can return later to see the result and answer review.
+
+The live screens read and write shared classroom data in Supabase. The local demo remains available after signing out. See [supabase/README.md](supabase/README.md) for schema, access rules, and setup details.
+
+## In the local demo
 
 - Responsive teacher and student dashboards with an English interface, larger controls, and clearer reading sizes.
 - Manual chapter creation, draft saving, editing, and publishing.
@@ -40,10 +48,18 @@ The Supabase schema is deployed to the connected **Schola clash** project. Use *
 - One ELO rating per teacher stream, updated after a match using correct answers (K = 32). In a draw, a lower-rated student gains rating and the higher-rated student loses the same amount.
 - Separate full-chapter practice that does not affect ranked results.
 - Answer explanations, student match history, and a teacher results summary.
-- Local persistence in the browser.
+- Full-chapter practice that does not affect ranked results.
+- Demo profiles and results persist in this browser.
+
+## In the live workspace
+
+- Supabase email/password accounts, with new accounts assigned the student role.
+- Teacher workspaces with classes, copyable join codes, chapter drafts, and server-validated publishing.
+- Student class membership, published chapters, asynchronous challenges and matches, answer review, and shared stream ELO.
+- Row-level access checks and server-side validation for writes and match results.
 
 ## Not implemented
 
-Chapters and matches are not yet stored in Supabase, so demo results do not sync across devices. There is no real invite-code flow, photo or document upload, OCR, LLM question generation, or real-time match. Speed does not affect ranked scores. The demo uses local profiles and sample questions only, so its ELO and results exist only in this browser.
+There is no photo or document upload, OCR, question generation, or real-time match. Live accounts need a configured Supabase project and email confirmation if enabled by the project. The signed-in student flow currently offers ranked chapter matches; the local demo also includes full-chapter practice. Speed does not affect ranked scores.
 
 For a fresh demo, clear this page’s site data or delete `schola-clash-prototype-v2` from `localStorage` in browser developer tools.
