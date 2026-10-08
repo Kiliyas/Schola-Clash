@@ -126,6 +126,10 @@ th { background: #fafbf9; color: var(--muted); font-weight: 700; }
 tr:last-child td { border-bottom: 0; }
 td strong { font-size: 14px; }
 .match-count { color: var(--muted); }
+.chapter-progress { margin-top: 34px; }
+.chapter-progress-section, .live-progress-section { padding-top: 3px; }
+.chapter-progress-section + .chapter-progress-section, .live-progress-section + .live-progress-section { margin-top: 28px; padding-top: 1px; border-top: 1px solid var(--line); }
+.chapter-progress-section .section-heading, .live-progress-section .section-heading { margin-top: 18px; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center; padding: 18px; background: rgb(23 34 28 / 55%); backdrop-filter: blur(3px); }
 .modal-backdrop.show { display: flex; }
 .modal { width: min(700px, 100%); max-height: min(90vh, 900px); overflow: auto; padding: 30px; border: 1px solid rgb(255 255 255 / 65%); border-radius: 22px; background: #fbfcfa; box-shadow: 0 28px 90px rgb(13 28 19 / 25%); }

@@ -432,7 +432,27 @@ function renderTeacherResults(students, sets) {
     return `<tr><td><span class="rank-number ${studentRank(students, student.id) <= 3 ? "rank-top" : ""}">${studentRank(students, student.id)}</span></td><td><strong>${escapeHtml(student.name)}</strong><div class="small">${escapeHtml(student.className)}</div></td><td><strong class="leaderboard-rating">${getStreamRating(student.id)}</strong> ELO</td><td>${matches.length}</td><td><strong>${correct} / ${total}</strong></td><td>${wins}</td></tr>`;
   }).join("");
 
-  return `<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Student</th><th>Stream rating</th><th>Ranked matches</th><th>Correct answers</th><th>Wins</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Student</th><th>Stream rating</th><th>Ranked matches</th><th>Correct answers</th><th>Wins</th></tr></thead><tbody>${rows}</tbody></table></div>${renderTeacherChapterProgress(students, sets)}`;
+}
+
+function renderTeacherChapterProgress(students, sets) {
+  const publishedSets = sets.filter((questionSet) => questionSet.published);
+  if (!publishedSets.length) return "";
+
+  return `<div class="chapter-progress"><div class="section-heading"><div><h2>Progress by chapter</h2><p>Completed ranked matches, answer accuracy, and wins for each chapter.</p></div></div>${publishedSets.map((questionSet) => {
+    const chapterStudents = students.filter((student) => questionSet.classNames.includes(student.className));
+    const rows = chapterStudents.map((student) => {
+      const matches = state.battles.filter((battle) => battle.setId === questionSet.id
+        && battle.participants.includes(student.id)
+        && ["done", "forfeit", "void"].includes(battle.status));
+      const scoredMatches = matches.filter((battle) => battle.attempts[student.id]?.submitted);
+      const correct = scoredMatches.reduce((total, battle) => total + calculateScore(battle, student.id), 0);
+      const total = scoredMatches.reduce((sum, battle) => sum + battle.questions.length, 0);
+      const wins = matches.filter((battle) => battle.winner === student.id).length;
+      return `<tr><td><strong>${escapeHtml(student.name)}</strong></td><td>${escapeHtml(student.className)}</td><td>${matches.length}</td><td>${correct} / ${total}</td><td>${wins}</td></tr>`;
+    }).join("");
+    return `<section class="chapter-progress-section"><div class="section-heading"><div><h3>${escapeHtml(questionSet.title)}</h3><p>${escapeHtml(questionSet.subject || "General")} · ${questionSet.classNames.map(escapeHtml).join(", ")}</p></div></div>${rows ? `<div class="table-wrap"><table><thead><tr><th>Student</th><th>Class</th><th>Completed matches</th><th>Correct answers</th><th>Wins</th></tr></thead><tbody>${rows}</tbody></table></div>` : emptyState("No students assigned", "Assign a class to this chapter to track its results.")}</section>`;
+  }).join("")}</div>`;
 }
 
 function renderClasses(students) {

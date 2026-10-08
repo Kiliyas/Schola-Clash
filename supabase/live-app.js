@@ -40,7 +40,7 @@
   async function loadTeacherData(userId) {
     const streams = await rows(client.from("teacher_streams")
       .select("id, name, created_at").eq("owner_user_id", userId).order("created_at", { ascending: true }));
-    if (!streams.length) return { streams, classes: [], chapters: [], assignments: [], invites: [], members: [], people: [] };
+    if (!streams.length) return { streams, classes: [], chapters: [], assignments: [], invites: [], members: [], people: [], matches: [], attempts: [] };
     const streamIds = streams.map((stream) => stream.id);
     const [classes, chapters] = await Promise.all([
       rows(client.from("classrooms").select("id, stream_id, name, created_at").in("stream_id", streamIds).order("created_at")),
@@ -48,19 +48,25 @@
     ]);
     const classIds = classes.map((item) => item.id);
     const chapterIds = chapters.map((item) => item.id);
-    const [assignments, invites, members, questionRows] = await Promise.all([
+    const [assignments, invites, members, questionRows, matches] = await Promise.all([
       chapterIds.length ? rows(client.from("chapter_classes").select("chapter_id, class_id").in("chapter_id", chapterIds)) : [],
       classIds.length ? rows(client.from("class_invites").select("code, class_id, expires_at").in("class_id", classIds).gt("expires_at", new Date().toISOString()).order("created_at", { ascending: false })) : [],
       classIds.length ? rows(client.from("class_members").select("class_id, user_id").in("class_id", classIds)) : [],
       chapterIds.length ? rows(client.from("chapter_questions").select("id, chapter_id").in("chapter_id", chapterIds)) : [],
+      rows(client.from("matches").select("id, chapter_id, player_one_id, player_two_id, status, winner_id, started_at")
+        .in("stream_id", streamIds).order("started_at", { ascending: false })),
     ]);
+    const matchIds = matches.map((match) => match.id);
+    const attempts = matchIds.length
+      ? await rows(client.from("match_attempts").select("match_id, user_id, submitted_at").in("match_id", matchIds))
+      : [];
     const memberIds = [...new Set(members.map((member) => member.user_id))];
     const people = memberIds.length
       ? await rows(client.from("user_profiles").select("id, display_name, role").in("id", memberIds))
       : [];
     const questionCounts = Object.fromEntries(chapters.map((chapter) => [chapter.id, 0]));
     questionRows.forEach((question) => { questionCounts[question.chapter_id] = (questionCounts[question.chapter_id] || 0) + 1; });
-    return { streams, classes, chapters, assignments, invites, members, people, questionCounts };
+    return { streams, classes, chapters, assignments, invites, members, people, questionCounts, matches, attempts };
   }
 
   async function loadStudentData(userId) {
@@ -183,8 +189,9 @@
     root.innerHTML = `${header("TEACHER WORKSPACE · LIVE DATA", `Welcome, ${model.profile.display_name}`, stream ? `Manage ${escape(stream.name)}. Changes save directly to Supabase.` : "Set up your teaching stream and classes to get started.", `<div class="live-header-actions"><button class="button button-outline" id="liveRefresh">Refresh</button>${createChapter}</div>`)}
       ${stream ? `<div class="live-hero"><div><p class="eyebrow">YOUR CLASSROOM</p><h2>${escape(stream.name)}</h2><p>One place for reviewed chapters, class invitations, and student progress.</p></div><div class="live-hero-mark" aria-hidden="true">✳</div></div>
         <div class="stats-grid">${statCard("▤", publishedCount, "Published chapters")}${statCard("♙", studentCount, "Students connected")}${statCard("▦", classCount, "Classes")}</div>
-        <nav class="tab-bar" aria-label="Teacher workspace sections"><button class="tab-button active" data-live-tab="chapters">Chapters</button><button class="tab-button" data-live-tab="classes">Classes</button></nav>
+        <nav class="tab-bar" aria-label="Teacher workspace sections"><button class="tab-button active" data-live-tab="chapters">Chapters</button><button class="tab-button" data-live-tab="results">Results</button><button class="tab-button" data-live-tab="classes">Classes</button></nav>
         <section class="tab-panel active" data-live-panel="chapters"><div class="section-heading"><div><h2>Your chapters</h2><p>Drafts stay private. Published chapters are available to their assigned classes.</p></div><span class="small">${model.chapters.length} total</span></div><div class="card-grid">${model.chapters.map(renderTeacherChapter).join("") || `<div class="empty-state"><strong>No chapters yet</strong>Create a chapter or load the 15-question starter to publish your first lesson.</div>`}</div>${classCount ? "" : `<div class="empty-state"><strong>Add a class first</strong>Chapters need at least one class before they can be assigned.</div>`}</section>
+        <section class="tab-panel" data-live-panel="results">${renderTeacherResults()}</section>
         <section class="tab-panel" data-live-panel="classes"><div class="section-heading"><div><h2>Your classes</h2><p>Share a class code so students can join with their own account.</p></div><button class="button button-secondary" id="liveAddClass">＋ Add class</button></div><div class="class-grid">${model.classes.map(renderTeacherClass).join("") || `<div class="empty-state"><strong>No classes yet</strong>Add your first class to invite students and publish chapters.</div>`}</div></section>`
         : `<section class="live-onboarding"><div class="live-onboarding-step">01</div><p class="eyebrow">FIRST STEP</p><h2>Create your teaching space</h2><p class="lede">Name your stream and add your first classes. You can create invite codes for students as soon as the classes are saved.</p><button class="button button-primary" id="liveCreateStream">Create teaching space <span aria-hidden="true">→</span></button></section>`}`;
 
@@ -196,6 +203,26 @@
     root.querySelectorAll("[data-new-invite]").forEach((button) => button.addEventListener("click", () => createInvite(button.dataset.newInvite, button)));
     root.querySelectorAll("[data-copy-invite]").forEach((button) => button.addEventListener("click", () => copyInvite(button.dataset.copyInvite)));
     bindLiveTabs();
+  }
+
+  function renderTeacherResults() {
+    const chapters = model.chapters.filter((chapter) => chapter.published_at);
+    if (!chapters.length) return `<div class="section-heading"><div><h2>Student results</h2><p>Match activity is grouped by chapter and student.</p></div></div><div class="empty-state"><strong>No published chapters yet</strong>Results will appear after students complete ranked matches.</div>`;
+    return `<div class="section-heading"><div><h2>Student results</h2><p>Match activity is grouped by chapter and student.</p></div></div>${chapters.map((chapter) => {
+      const classIds = new Set(model.assignments.filter((item) => item.chapter_id === chapter.id).map((item) => item.class_id));
+      const classes = model.classes.filter((classroom) => classIds.has(classroom.id));
+      const studentIds = new Set(model.members.filter((member) => classIds.has(member.class_id)).map((member) => member.user_id));
+      const students = [...studentIds].map((id) => model.people.find((person) => person.id === id)).filter((person) => person?.role === "student");
+      const matchRows = students.map((student) => {
+        const matches = model.matches.filter((match) => match.chapter_id === chapter.id && (match.player_one_id === student.id || match.player_two_id === student.id));
+        const matchIds = new Set(matches.map((match) => match.id));
+        const submitted = model.attempts.filter((attempt) => attempt.user_id === student.id && matchIds.has(attempt.match_id) && attempt.submitted_at).length;
+        const wins = matches.filter((match) => match.winner_id === student.id).length;
+        const classNames = classes.filter((classroom) => model.members.some((member) => member.class_id === classroom.id && member.user_id === student.id)).map((classroom) => classroom.name);
+        return `<tr><td><strong>${escape(student.display_name)}</strong></td><td>${escape(classNames.join(", "))}</td><td>${matches.length}</td><td>${submitted}</td><td>${wins}</td></tr>`;
+      }).join("");
+      return `<section class="live-progress-section"><div class="section-heading"><div><h3>${escape(chapter.title)}</h3><p>${escape(chapter.subject || "General")} · ${classes.length} ${classes.length === 1 ? "class" : "classes"} · ${model.matches.filter((match) => match.chapter_id === chapter.id).length} ranked matches</p></div></div>${matchRows ? `<div class="table-wrap"><table><thead><tr><th>Student</th><th>Class</th><th>Matches</th><th>Submitted</th><th>Wins</th></tr></thead><tbody>${matchRows}</tbody></table></div>` : `<div class="empty-state"><strong>No students in assigned classes yet</strong>Student activity will appear here after they join.</div>`}</section>`;
+    }).join("")}`;
   }
 
   function renderTeacherChapter(chapter) {
@@ -387,10 +414,11 @@
     root.innerHTML = `${header("STUDENT WORKSPACE · LIVE DATA", `Welcome, ${model.profile.display_name}`, "Your classes, chapters, and ranked matches are connected to your account.", `<button class="button button-outline" id="liveRefresh">Refresh</button>`)}
       <div class="live-hero"><div><p class="eyebrow">YOUR LEARNING SPACE</p><h2>${classes.length ? `${classes.length} ${classes.length === 1 ? "class" : "classes"} connected` : "Start by joining your class"}</h2><p>${classes.length ? classes.map((classroom) => escape(classroom.name)).join(" · ") : "Enter the class code your teacher shared with you."}</p></div><div class="live-hero-mark" aria-hidden="true">✳</div></div>
       ${classes.length ? `<div class="stats-grid">${statCard("▤", chapters.length, "Published chapters")}${statCard("⚔", active, "Active matches")}${statCard("♙", new Set(model.members.map((member) => member.user_id)).size, "Classmates")}</div>` : ""}
-      ${classes.length ? `<nav class="tab-bar" aria-label="Student workspace sections"><button class="tab-button active" data-live-tab="learn">Learn</button><button class="tab-button" data-live-tab="matches">Matches ${model.challenges.filter((item) => item.status === "pending" && item.opponent_id === model.userId).length ? "· new" : ""}</button><button class="tab-button" data-live-tab="classmates">Classmates</button></nav>
+      ${classes.length ? `<nav class="tab-bar" aria-label="Student workspace sections"><button class="tab-button active" data-live-tab="learn">Learn</button><button class="tab-button" data-live-tab="matches">Matches ${model.challenges.filter((item) => item.status === "pending" && item.opponent_id === model.userId).length ? "· new" : ""}</button><button class="tab-button" data-live-tab="classmates">Classmates</button><button class="tab-button" data-live-tab="history">History</button></nav>
         <section class="tab-panel active" data-live-panel="learn"><div class="section-heading"><div><h2>Available chapters</h2><p>Choose a classmate to start an asynchronous ranked match.</p></div><span class="small">${chapters.length} available</span></div><div class="card-grid">${chapters.map(renderStudentChapter).join("") || `<div class="empty-state"><strong>No published chapters yet</strong>Your teacher's chapters will appear here when they are assigned to this class.</div>`}</div><div class="live-inline-action">${joinAction}</div></section>
         <section class="tab-panel" data-live-panel="matches">${renderStudentMatches()}</section>
-        <section class="tab-panel" data-live-panel="classmates"><div class="section-heading"><div><h2>Classmates</h2><p>Invite a classmate from one of your published chapters to start a match.</p></div></div><div class="class-grid">${classes.map(renderStudentClass).join("")}</div></section>`
+        <section class="tab-panel" data-live-panel="classmates"><div class="section-heading"><div><h2>Classmates</h2><p>Invite a classmate from one of your published chapters to start a match.</p></div></div><div class="class-grid">${classes.map(renderStudentClass).join("")}</div></section>
+        <section class="tab-panel" data-live-panel="history">${renderStudentHistory()}</section>`
         : `<section class="live-onboarding"><div class="live-onboarding-step">01</div><p class="eyebrow">JOIN YOUR CLASS</p><h2>Learn with your classmates</h2><p class="lede">Ask your teacher for the class code. Joining links your account to the class and unlocks its published chapters.</p><button class="button button-primary" id="liveJoinFirst">Enter class code <span aria-hidden="true">→</span></button><p class="small live-role-note">New accounts are student accounts. A project administrator assigns teacher access.</p></section>`}`;
     root.querySelector("#liveRefresh")?.addEventListener("click", () => refresh());
     root.querySelector("#liveJoinClass")?.addEventListener("click", openJoinModal);
@@ -421,7 +449,7 @@
 
   function renderStudentMatches() {
     const pending = model.challenges.filter((challenge) => challenge.status === "pending");
-    const matches = model.matches;
+    const matches = model.matches.filter((match) => match.status === "active");
     const pendingMarkup = pending.length ? `<div class="section-heading"><div><h2>Invitations</h2><p>Challenges expire after three hours.</p></div></div><div class="live-list">${pending.map((challenge) => {
       const opponentId = challenge.challenger_id === model.userId ? challenge.opponent_id : challenge.challenger_id;
       const person = model.people.find((entry) => entry.id === opponentId);
@@ -437,15 +465,27 @@
       const person = model.people.find((entry) => entry.id === opponentId);
       const chapter = model.chapters.find((entry) => entry.id === match.chapter_id);
       const attempt = model.attempts.find((entry) => entry.match_id === match.id);
-      const title = match.status === "active" ? (attempt?.submitted_at ? "Submitted · waiting for opponent" : `Your turn · due ${new Date(match.deadline_at).toLocaleString()}`)
-        : match.status === "completed" ? (match.winner_id === model.userId ? "Completed · you won" : match.winner_id ? "Completed · opponent won" : "Completed · draw")
-          : match.status === "forfeit" ? (match.winner_id === model.userId ? "Won by forfeit" : "Lost by forfeit") : "No contest";
-      const button = match.status === "active" && !attempt?.submitted_at
-        ? `<button class="button button-primary" data-live-match="${escape(match.id)}">Play match</button>`
-        : `<button class="button button-outline" data-live-match="${escape(match.id)}">${match.status === "completed" ? "View result" : match.status === "active" ? "View status" : "Details"}</button>`;
+      const title = attempt?.submitted_at ? "Submitted · waiting for opponent" : `Your turn · due ${new Date(match.deadline_at).toLocaleString()}`;
+      const button = attempt?.submitted_at
+        ? `<button class="button button-outline" data-live-match="${escape(match.id)}">View status</button>`
+        : `<button class="button button-primary" data-live-match="${escape(match.id)}">Play match</button>`;
       return `<article class="surface-card challenge-card"><div class="player-block"><span class="avatar ${match.status === "completed" ? "gold" : ""}">${escape((person?.display_name || "S").slice(0, 1).toUpperCase())}</span><div class="player-copy"><strong>${escape(person?.display_name || "Classmate")} · ${escape(chapter?.title || "Chapter")}</strong><span class="small">${escape(title)}</span></div></div>${button}</article>`;
-    }).join("")}</div>` : `<div class="empty-state"><strong>No matches yet</strong>Challenge a classmate from an available chapter to start one.</div>`;
+    }).join("")}</div>` : `<div class="empty-state"><strong>No active matches</strong>Accepted matches will appear here until both students finish.</div>`;
     return `<div class="section-heading"><div><h2>Challenges and matches</h2><p>Invitations do not use a match until accepted.</p></div></div>${pendingMarkup}${matchesMarkup}`;
+  }
+
+  function renderStudentHistory() {
+    const matches = model.matches.filter((match) => ["completed", "forfeit", "no_contest"].includes(match.status));
+    const matchList = matches.length ? `<div class="live-list">${matches.map((match) => {
+      const opponentId = match.player_one_id === model.userId ? match.player_two_id : match.player_one_id;
+      const person = model.people.find((entry) => entry.id === opponentId);
+      const chapter = model.chapters.find((entry) => entry.id === match.chapter_id);
+      const attempt = model.attempts.find((entry) => entry.match_id === match.id);
+      const title = match.status === "completed" ? (match.winner_id === model.userId ? "You won" : match.winner_id ? "Opponent won" : "Draw")
+        : match.status === "forfeit" ? (match.winner_id === model.userId ? "Won by forfeit" : "Lost by forfeit") : "No contest";
+      return `<article class="surface-card challenge-card"><div class="player-block"><span class="avatar ${match.status === "completed" ? "gold" : ""}">${escape((person?.display_name || "S").slice(0, 1).toUpperCase())}</span><div class="player-copy"><strong>${escape(chapter?.title || "Chapter")}</strong><span class="small">${escape(person?.display_name || "Classmate")} · ${escape(title)} · ${attempt?.submitted_at ? "Answers submitted" : "No submission"}</span></div></div><button class="button button-outline" data-live-match="${escape(match.id)}">${match.status === "completed" ? "View result" : "Details"}</button></article>`;
+    }).join("")}</div>` : `<div class="empty-state"><strong>No completed matches yet</strong>Your results and answer reviews will appear here after a match ends.</div>`;
+    return `<div class="section-heading"><div><h2>Match history</h2><p>Review completed matches and your submitted answers.</p></div></div>${matchList}`;
   }
 
   function openJoinModal() {
