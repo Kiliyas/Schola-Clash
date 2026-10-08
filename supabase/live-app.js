@@ -1,7 +1,7 @@
 (() => {
   const client = window.scholaSupabase;
   const root = document.getElementById("app");
-  const model = { userId: null, role: null, profile: null, loaded: false, loading: false, error: null };
+  const model = { userId: null, role: null, profile: null, loaded: false, loading: false, error: null, activeTab: null };
   let context = null;
   let loadGeneration = 0;
 
@@ -104,10 +104,10 @@
   async function loadData() {
     const generation = ++loadGeneration;
     const userId = context.session.user.id;
+    const hadData = model.loaded;
     model.loading = true;
-    model.loaded = false;
     model.error = null;
-    loadingView();
+    if (!hadData) loadingView();
     try {
       const data = model.role === "teacher" ? await loadTeacherData(userId) : await loadStudentData(userId);
       if (generation !== loadGeneration) return;
@@ -127,7 +127,7 @@
       const role = context.profile?.role;
       if (userId !== model.userId || role !== model.role) {
         loadGeneration += 1;
-        Object.assign(model, { userId, role, profile: context.profile, loaded: false, loading: false, error: null });
+        Object.assign(model, { userId, role, profile: context.profile, loaded: false, loading: false, error: null, activeTab: null });
       } else {
         model.role = context.profile?.role;
         model.profile = context.profile;
@@ -138,7 +138,7 @@
       root.innerHTML = `${header("ACCOUNT SETUP", "Your profile is unavailable", "The Supabase session is active, but no profile row could be loaded.")}<div class="empty-state"><strong>${escape(context.profileError || "Ask the project administrator to check your account profile.")}</strong></div>`;
       return;
     }
-    if (model.loading) return loadingView();
+    if (model.loading && !model.loaded) return loadingView();
     if (model.error) return errorView(model.error);
     if (!model.loaded) return loadData();
     renderBody();
@@ -147,6 +147,13 @@
   function renderBody() {
     if (model.role === "teacher") renderTeacher();
     else renderStudent();
+    if (model.activeTab) {
+      const selected = [...root.querySelectorAll("[data-live-tab]")].find((button) => button.dataset.liveTab === model.activeTab);
+      if (selected) {
+        root.querySelectorAll("[data-live-tab]").forEach((button) => button.classList.toggle("active", button === selected));
+        root.querySelectorAll("[data-live-panel]").forEach((panel) => panel.classList.toggle("active", panel.dataset.livePanel === model.activeTab));
+      }
+    }
   }
 
   function refresh() {
@@ -158,6 +165,7 @@
   function bindLiveTabs() {
     const buttons = [...root.querySelectorAll("[data-live-tab]")];
     buttons.forEach((button) => button.addEventListener("click", () => {
+      model.activeTab = button.dataset.liveTab;
       buttons.forEach((candidate) => candidate.classList.toggle("active", candidate === button));
       root.querySelectorAll("[data-live-panel]").forEach((panel) => {
         panel.classList.toggle("active", panel.dataset.livePanel === button.dataset.liveTab);
