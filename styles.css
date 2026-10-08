@@ -258,6 +258,15 @@ textarea:focus-visible { outline: 3px solid #a7c987; outline-offset: 2px; }
 .rating-meta strong { font-size: 17px; line-height: 1.4; overflow-wrap: anywhere; }
 .profile-name-button { display: inline-block; max-width: 100%; min-height: 28px; padding: 2px 0; border: 0; border-bottom: 1px solid #83b4a5; border-radius: 0; background: transparent; color: var(--green-dark); font-size: 14px; font-weight: 750; line-height: 1.4; text-align: left; overflow-wrap: anywhere; }
 .profile-name-button:hover { color: #0c4737; border-bottom-color: currentColor; background: var(--green-soft); }
+.role-badge[hidden] { display: none; }
+.account-screen { max-width: 440px; margin: 46px auto 60px; }
+.account-form { display: grid; margin-top: 28px; }
+.account-form .field { margin-bottom: 18px; }
+.account-message { margin-bottom: 16px; overflow-wrap: anywhere; }
+.account-message:empty { display: none; }
+.account-submit { width: 100%; }
+.account-switch { margin-top: 18px; padding: 8px 0; border: 0; background: transparent; color: var(--green-dark); font-size: 14px; text-decoration: underline; text-underline-offset: 3px; }
+.account-retry { margin-top: 20px; }
 .profile-heading { display: flex; align-items: center; gap: 16px; margin: 12px 0 24px; }
 .profile-avatar { display: grid; flex: 0 0 60px; width: 60px; height: 60px; place-items: center; border-radius: 8px; background: #f9ece5; color: #a25130; font-size: 26px; font-weight: 750; }
 .profile-identity { min-width: 0; }

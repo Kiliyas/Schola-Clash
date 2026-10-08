@@ -61,18 +61,29 @@ function liveFixtures(role, zeroMatches = false) {
 
 function installSupabaseStub(fixtures) {
   window.__mockWrites = [];
+  window.__authCalls = [];
+  if (fixtures.role === "connection-error") return;
+  let currentSession = fixtures.role === "signed-out" ? null : { user: { id: fixtures.userId } };
   const blockedWrite = (name) => {
     window.__mockWrites.push(name);
     throw new Error(`Unexpected write in browser smoke test: ${name}`);
   };
   const client = {
     auth: {
-      getSession: async () => ({ data: { session: fixtures.role === "demo" ? null : { user: { id: fixtures.userId } } }, error: null }),
+      getSession: async () => ({ data: { session: currentSession }, error: null }),
+      signInWithPassword: async ({ email }) => {
+        window.__authCalls.push("signIn");
+        if (email === "wrong@example.com") return { error: { code: "invalid_credentials", message: "Invalid login credentials" } };
+        if (email === "technical@example.com") return { error: { status: 500, message: "Supabase database error: SQL schema cache failed" } };
+        currentSession = { user: { id: "student-live" } };
+        return { data: { session: currentSession }, error: null };
+      },
+      signUp: async () => { window.__authCalls.push("signUp"); return { data: { session: null }, error: null }; },
       onAuthStateChange: (listener) => {
         window.__emitMockAuth = (session) => listener(session ? "SIGNED_IN" : "SIGNED_OUT", session);
         return { data: { subscription: { unsubscribe() {} } } };
       },
-      signOut: () => blockedWrite("auth.signOut"),
+      signOut: async () => { currentSession = null; window.__authCalls.push("signOut"); return { error: null }; },
     },
     from(table) {
       let predicates = [];
@@ -102,7 +113,13 @@ function installSupabaseStub(fixtures) {
             let data = fixtures.tables[table].filter((row) => predicates.every((predicate) => predicate(row)));
             if (ordering) data.sort((a, b) => String(a[ordering.key]).localeCompare(String(b[ordering.key])) * (ordering.ascending ? 1 : -1));
             data = data.slice(0, count);
-            return Promise.resolve({ data: single ? data[0] || null : data, error: null }).then(resolve, reject);
+            const result = { data: single ? data[0] || null : data, error: null };
+            if (table === "teacher_streams" && window.__pauseWorkspace) {
+              return new Promise((resume) => {
+                window.__resumeWorkspace = () => { window.__pauseWorkspace = false; resume(result); };
+              }).then(resolve, reject);
+            }
+            return Promise.resolve(result).then(resolve, reject);
           } catch (error) {
             return Promise.reject(error).then(resolve, reject);
           }
@@ -111,32 +128,16 @@ function installSupabaseStub(fixtures) {
       return query;
     },
     rpc(name, args) {
+      if (fixtures.role === "server-error") return Promise.resolve({ data: null, error: { code: "PGRST202", message: "Could not find the function public.get_teacher_chapter_progress in Supabase schema cache" } });
+      if (name === "get_practice_questions") return Promise.resolve({ data: [
+        { prompt: "First practice question", options: ["First", "Second", "Third", "Fourth"], correct_option_index: 0, explanation: "Practice explanation" },
+        { prompt: "Second practice question", options: ["One", "Two", "Three", "Four"], correct_option_index: 1, explanation: "Second explanation" },
+      ], error: null });
       if (name === "get_teacher_chapter_progress") return Promise.resolve({ data: fixtures.progress.filter((entry) => entry.stream_id === args.p_stream_id), error: null });
       return blockedWrite(`rpc.${name}`);
     },
   };
   window.supabase = { createClient: () => client };
-}
-
-function demoFixture() {
-  const questions = [
-    ["First question", ["A", "B", "C", "D"], 0, "First explanation"],
-    ["Second question", ["A", "B", "C", "D"], 1, "Second explanation"],
-  ];
-  return {
-    activeUserId: "teacher-demo",
-    users: [
-      { id: "teacher-demo", name: "Demo Teacher", role: "teacher", stream: "Demo stream" },
-      { id: "student-demo", name: "Alexandra Konstantinovna", role: "student", className: "Grade 11A", stream: "Demo stream", streamRatings: { "Demo stream": 1288 } },
-      { id: "opponent-demo", name: "Sasha", role: "student", className: "Grade 11A", stream: "Demo stream", streamRatings: { "Demo stream": 972 } },
-    ],
-    sets: [{ id: "chapter-demo", title: "Demo History", subject: "History", published: true, stream: "Demo stream", classNames: ["Grade 11A"], questions }],
-    battles: [{ id: "match-demo", setId: "chapter-demo", status: "done", participants: ["student-demo", "opponent-demo"], createdAt: Date.parse(timestamp), acceptedAt: Date.parse(timestamp), winner: "student-demo", ratingApplied: true,
-      questions: questions.map(([text, options, correct, explanation]) => ({ text, options, correct, explanation })),
-      attempts: { "student-demo": { answers: [0, 0], submitted: true, optionOrders: [[0, 1, 2, 3], [0, 1, 2, 3]] }, "opponent-demo": { answers: [2, 2], submitted: true, optionOrders: [[0, 1, 2, 3], [0, 1, 2, 3]] } },
-      ratingBefore: { "student-demo": 1272, "opponent-demo": 988 }, ratingChanges: { "student-demo": 16, "opponent-demo": -16 },
-    }],
-  };
 }
 
 async function assertLayout(page, label, modal = false) {
@@ -169,16 +170,19 @@ async function run() {
   const screenshots = [];
   let checks = 0;
   try {
-    for (const width of [1440, 390, 320]) {
-      for (const scenario of ["demo", "teacher", "student", "student-empty"]) {
+    for (const width of [1440, 390, 320].filter((value) => !process.env.SCHOLA_TEST_WIDTH || value === Number(process.env.SCHOLA_TEST_WIDTH))) {
+      for (const scenario of ["signed-out", "teacher", "student", "student-empty", "connection-error", "server-error", "profile-missing", "teacher-empty"].filter((value) => !process.env.SCHOLA_TEST_SCENARIO || value === process.env.SCHOLA_TEST_SCENARIO)) {
         const errors = [];
         const blockedNetwork = [];
         const context = await browser.newContext({ viewport: { width, height: width === 1440 ? 1000 : 844 }, locale: "en-US" });
         const page = await context.newPage();
-        page.on("pageerror", (error) => errors.push(error.message));
-        const fixtures = scenario === "demo" ? { role: "demo", tables: {}, progress: [] } : liveFixtures(scenario === "teacher" ? "teacher" : "student", scenario === "student-empty");
+        page.on("pageerror", (error) => { errors.push(error.message); console.error(`${scenario}-${width}: ${error.message}`); });
+        const fixtures = liveFixtures(["teacher", "server-error", "profile-missing", "teacher-empty"].includes(scenario) ? "teacher" : "student", scenario === "student-empty");
+        if (["signed-out", "connection-error", "server-error"].includes(scenario)) fixtures.role = scenario;
+        if (scenario === "profile-missing") fixtures.tables.user_profiles = [];
+        if (scenario === "teacher-empty") fixtures.tables.teacher_streams = [];
         await context.addInitScript(installSupabaseStub, fixtures);
-        if (scenario === "demo") await context.addInitScript((fixture) => localStorage.setItem("schola-clash-prototype-v2", JSON.stringify(fixture)), demoFixture());
+        await context.addInitScript(() => localStorage.setItem("schola-clash-prototype-v2", JSON.stringify({ activeUserId: "old-demo-teacher", users: [{ id: "old-demo-teacher", name: "Old Demo Teacher", role: "teacher" }], sets: [], battles: [] })));
         await page.route("**/*", async (route) => {
           const url = new URL(route.request().url());
           if (url.hostname === "cdn.jsdelivr.net") return route.fulfill({ contentType: "application/javascript", body: "/* The client is provided by the isolated test fixture. */" });
@@ -189,37 +193,50 @@ async function run() {
         });
         const label = `${scenario}-${width}`;
         await page.goto(baseUrl, { waitUntil: "networkidle" });
-        if (scenario === "demo") {
-          await page.locator('[data-tab="classes"]').click();
-          await page.locator('#panel-classes [data-student-profile="student-demo"]').click();
-          await assertText(page.locator("#modalTitle"), /Alexandra Konstantinovna/);
-          await assertText(page.locator(".profile-metrics"), /1288[\s\S]*50%[\s\S]*1 \/ 2/);
-          await assertText(page.locator(".student-profile"), /Demo History[\s\S]*Sasha[\s\S]*Win/);
-          await assertLayout(page, `${label}-profile`, true);
-          const profilePath = path.join(screenshotDir, `${label}-profile.png`);
-          await page.screenshot({ path: profilePath, fullPage: true });
-          screenshots.push(profilePath);
+        if (scenario === "signed-out") {
+          await page.locator("#authForm").waitFor();
+          assert.equal(await page.locator("#userSelect").count(), 0);
+          assert.equal(await page.locator("[data-live-tab]").count(), 0);
+          await page.locator("#toggleAuthMode").click();
+          await page.locator("#authName").fill("New Student");
+          await page.locator("#authEmail").fill("new@example.com");
+          await page.locator("#authPassword").fill("validPassword123");
+          await page.locator('#authForm button[type="submit"]').click();
+          await assertText(page.locator("#authMessage"), /confirmation link/);
+          await page.locator("#toggleAuthMode").click();
+          await page.locator("#authEmail").fill("wrong@example.com");
+          await page.locator("#authPassword").fill("validPassword123");
+          await page.locator('#authForm button[type="submit"]').click();
+          await assertText(page.locator("#authMessage"), /email or password is incorrect/);
+          await page.locator("#authEmail").fill("technical@example.com");
+          await page.locator('#authForm button[type="submit"]').click();
+          await assertText(page.locator("#authMessage"), /couldn't sign you in/);
+          assert.doesNotMatch(await page.locator("body").innerText(), /Supabase|schema cache|SQL/i);
+          await page.locator("#authEmail").fill("student@example.com");
+          await page.locator('#authForm button[type="submit"]').click();
+          await assertText(page.locator(".rating-number").first(), /1264/);
+          await page.locator("#authButton").click();
+          await page.locator("#authForm").waitFor();
+          assert.equal(await page.locator(".rating-overview").count(), 0);
+          await page.reload({ waitUntil: "networkidle" });
+          await page.locator("#authForm").waitFor();
+          assert.equal(await page.locator("#userSelect").count(), 0);
+        } else if (scenario === "connection-error") {
+          await assertText(page.locator("#app"), /couldn't connect[\s\S]*internet connection/);
+        } else if (scenario === "server-error" || scenario === "profile-missing") {
+          await assertText(page.locator("#app"), /couldn't load/);
+        } else if (scenario === "teacher-empty") {
+          await page.locator("#liveCreateStream").click();
+          await assertText(page.locator("#modalTitle"), /Create your teaching space/);
+          await assertText(page.locator("#modal"), /Teaching space name/);
+          await assertLayout(page, label, true);
           await page.getByRole("button", { name: "Close", exact: true }).click();
-          await page.locator('[data-tab="results"]').click();
-          const resultButtons = page.locator('#panel-results [data-student-profile="student-demo"]');
-          assert.equal(await resultButtons.count(), 2);
-          for (let index = 0; index < 2; index += 1) {
-            await resultButtons.nth(index).click();
-            await assertText(page.locator("#modalTitle"), /Alexandra/);
-            await page.keyboard.press("Escape");
-            await page.locator("#modalBackdrop").waitFor({ state: "hidden" });
-          }
-          await resultButtons.first().click();
-          await page.evaluate(() => {
-            const stored = JSON.parse(localStorage.getItem("schola-clash-prototype-v2"));
-            stored.activeUserId = "student-demo";
-            localStorage.setItem("schola-clash-prototype-v2", JSON.stringify(stored));
-            window.dispatchEvent(new StorageEvent("storage", { key: "schola-clash-prototype-v2" }));
-          });
-          await page.locator("#modalBackdrop").waitFor({ state: "hidden" });
-          await assertText(page.locator(".rating-number"), /1288\s*ELO/);
-          assert.ok((await page.locator(".rating-overview").boundingBox()).y < 600, "Demo rating should be near the top");
         } else if (scenario === "teacher") {
+          await page.locator("#liveCreateChapter").click();
+          await assertText(page.locator("#modalTitle"), /Create a chapter/);
+          assert.equal(await page.locator("#liveUseStarter").count(), 0);
+          assert.doesNotMatch(await page.locator("#modal").innerText(), /starter|demo|Supabase/i);
+          await page.getByRole("button", { name: "Close", exact: true }).click();
           await page.locator('[data-live-tab="classes"]').click();
           const classesPath = path.join(screenshotDir, `${label}-classes.png`);
           await page.screenshot({ path: classesPath, fullPage: true });
@@ -247,6 +264,14 @@ async function run() {
           await assertText(page.locator(".rating-overview").nth(1), scenario === "student-empty" ? /1000\s*ELO/ : /1132\s*ELO[\s\S]*-12 ELO/);
           if (scenario === "student-empty") assert.doesNotMatch(await page.locator(".rating-overviews").innerText(), /undefined|NaN|[+-]0 ELO/);
           assert.ok((await page.locator(".rating-overview").first().boundingBox()).y < 600, "Live rating should be near the top");
+          await page.locator("[data-live-practice]").first().click();
+          await assertText(page.locator("#modalTitle"), /World History/);
+          await page.locator("[data-answer]").first().click();
+          await page.locator("#nextQuestion").click();
+          await page.locator("[data-answer]").first().click();
+          await page.locator("#nextQuestion").click();
+          await assertText(page.locator("#modal"), /PRACTICE COMPLETE[\s\S]*Practice explanation/);
+          await page.getByRole("button", { name: "Close", exact: true }).click();
         }
         await assertLayout(page, label);
         const screenshotPath = path.join(screenshotDir, `${label}.png`);
@@ -254,10 +279,17 @@ async function run() {
         screenshots.push(screenshotPath);
         if (scenario === "teacher") {
           await page.locator('[data-live-panel="results"] [data-student-profile="student-live"]').first().click();
+          await page.evaluate(() => { window.__pauseWorkspace = true; window.__pendingRefresh = window.ScholaLiveApp.refresh(); });
+          await page.waitForFunction(() => typeof window.__resumeWorkspace === "function");
           await page.evaluate(() => window.__emitMockAuth(null));
           await page.locator("#modalBackdrop").waitFor({ state: "hidden" });
+          await page.locator("#authForm").waitFor();
+          await page.evaluate(async () => { window.__resumeWorkspace(); await window.__pendingRefresh; });
+          assert.equal(await page.locator("#authForm").count(), 1, "A late workspace response must not restore a signed-out account");
           assert.equal(await page.locator(".student-profile").count(), 0, "Signing out must remove the previous teacher profile");
         }
+        assert.doesNotMatch(await page.locator("body").innerText(), /supabase|postgrest|schema cache|\\brpc\\b|prototype|demo workspace|demo profile|Old Demo Teacher/i);
+        assert.equal(await page.locator("#userSelect").count(), 0);
         assert.deepEqual(errors, [], `${label}: page errors`);
         assert.deepEqual(await page.evaluate(() => window.__mockWrites), [], `${label}: unexpected writes`);
         assert.deepEqual(blockedNetwork, [], `${label}: unexpected external network`);

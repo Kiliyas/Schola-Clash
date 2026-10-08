@@ -15,7 +15,7 @@
 
 The client RPCs are `create_teacher_space`, `create_class_invite`, `join_class_by_code`, `save_chapter`, `create_challenge`, `cancel_challenge`, `accept_challenge`, `submit_match_answers`, and `refresh_match`. Calls must come from an authenticated Supabase session. Read queries use the public tables and their RLS policies.
 
-The browser client provides email/password sign-in, student account creation, and a profile read from `public.user_profiles`. Signed-in users see live teacher or student workspaces; the local demo profile picker is hidden while authenticated. New accounts start as students. Teacher roles must be assigned by a trusted project administrator; never add a public role selector.
+The browser client provides email/password sign-in, student account creation, and a profile read from `public.user_profiles`. Only authenticated users can open teacher or student workspaces. Signing out returns to the sign-in screen. New accounts start as students. Teacher roles must be assigned by a trusted project administrator; never add a public role selector.
 
 ## Security setup
 
