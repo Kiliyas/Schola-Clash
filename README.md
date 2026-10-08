@@ -48,7 +48,7 @@ The live screens read and write shared classroom data in Supabase. The local dem
 - One ELO rating per teacher stream, updated after a match using correct answers (K = 32). In a draw, a lower-rated student gains rating and the higher-rated student loses the same amount.
 - Separate full-chapter practice that does not affect ranked results.
 - Answer explanations, student match history, and a teacher results summary.
-- Full-chapter practice that does not affect ranked results.
+- Teachers can remove a student from a class without deleting their account or past match history.
 - Demo profiles and results persist in this browser.
 
 ## In the live workspace
@@ -56,10 +56,24 @@ The live screens read and write shared classroom data in Supabase. The local dem
 - Supabase email/password accounts, with new accounts assigned the student role.
 - Teacher workspaces with classes, copyable join codes, chapter drafts, and server-validated publishing.
 - Student class membership, published chapters, asynchronous challenges and matches, answer review, and shared stream ELO.
+- Teachers can edit published chapters, remove students from classes, and review students' correct-answer totals.
+- Click a student's name in classes or results to view their rating, class membership, chapter progress, and recent matches.
+- The student dashboard shows ELO and the latest rating change for each teacher stream above the chapter list.
+- Students can practise every question in an assigned chapter without changing ranked results and see both players' scores after a match.
 - Row-level access checks and server-side validation for writes and match results.
 
 ## Not implemented
 
-There is no photo or document upload, OCR, question generation, or real-time match. Live accounts need a configured Supabase project and email confirmation if enabled by the project. The signed-in student flow currently offers ranked chapter matches; the local demo also includes full-chapter practice. Speed does not affect ranked scores.
+There is no photo or document upload, OCR, question generation, or real-time match. Live accounts need a configured Supabase project and email confirmation if enabled by the project. Speed does not affect ranked scores.
 
-For a fresh demo, clear this page’s site data or delete `schola-clash-prototype-v2` from `localStorage` in browser developer tools.
+For a fresh demo, clear this page's site data or delete `schola-clash-prototype-v2` from `localStorage` in browser developer tools.
+
+## Browser checks
+
+With the local server running, Playwright available to Node, and Chrome installed, run:
+
+```powershell
+node tests/profiles.browser.cjs
+```
+
+The checks use isolated demo and Supabase fixtures, cover student profiles and ELO at desktop and mobile widths, and block external requests and data writes. Screenshots are saved to `schola-profile-smoke` in the system temporary directory. Set `SCHOLA_TEST_URL` to use another local port or `SCHOLA_BROWSER_CHANNEL` to select another installed Chromium browser.

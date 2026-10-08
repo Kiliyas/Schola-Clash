@@ -179,7 +179,7 @@ function closeModal() {
 
 function paintSupabaseStatus() {
   if (!supabaseClient) {
-    supabaseStatus.textContent = "Supabase client unavailable";
+    supabaseStatus.textContent = "Connection unavailable";
     authButton.textContent = "Connection unavailable";
     authButton.disabled = true;
     return;
@@ -187,15 +187,15 @@ function paintSupabaseStatus() {
 
   authButton.disabled = false;
   if (!supabaseSession) {
-    supabaseStatus.textContent = "Supabase configured · demo data";
-    supabaseStatus.title = "The client is configured. Sign in to check the database profile.";
+    supabaseStatus.textContent = "Demo workspace";
+    supabaseStatus.title = "Local demo profiles";
     authButton.textContent = "Sign in";
     return;
   }
 
   if (supabaseProfile) {
-    supabaseStatus.textContent = `Connected · live ${supabaseProfile.role} workspace`;
-    supabaseStatus.title = `Signed in as ${supabaseProfile.display_name}. Classroom data is loaded from Supabase.`;
+    supabaseStatus.textContent = "Connected";
+    supabaseStatus.title = `Signed in as ${supabaseProfile.display_name}`;
   } else {
     supabaseStatus.textContent = "Signed in · profile not loaded";
     supabaseStatus.title = supabaseProfileError || "No profile row was returned for this account.";
@@ -209,6 +209,7 @@ async function refreshSupabaseSession(session = undefined) {
   if (nextSession === undefined) {
     const { data, error } = await supabaseClient.auth.getSession();
     if (error) {
+      if (supabaseSession?.user) closeModal();
       supabaseSession = null;
       supabaseProfile = null;
       supabaseProfileError = error.message;
@@ -220,6 +221,7 @@ async function refreshSupabaseSession(session = undefined) {
     nextSession = data.session;
   }
 
+  if (supabaseSession?.user?.id !== nextSession?.user?.id) closeModal();
   supabaseSession = nextSession;
   supabaseProfile = null;
   supabaseProfileError = null;
@@ -342,7 +344,7 @@ function updateProfilePicker() {
   const person = currentUser();
   roleBadge.textContent = person.role === "teacher" ? "Teacher" : "Student";
   userSelect.innerHTML = state.users.map((profile) => {
-    const label = profile.role === "teacher" ? `Teacher · ${profile.name}` : `${profile.name} · ${profile.className}`;
+    const label = profile.role === "teacher" ? `Teacher · ${profile.name}` : `${profile.name} · ${profile.className || "No class"}`;
     return `<option value="${escapeHtml(profile.id)}" ${profile.id === person.id ? "selected" : ""}>${escapeHtml(label)}</option>`;
   }).join("");
 }
@@ -389,15 +391,11 @@ function teacherStats(person, students, sets) {
 }
 
 function renderTeacher(person) {
-  const students = state.users.filter((user) => user.role === "student" && user.stream === person.stream);
+  const students = state.users.filter((user) => user.role === "student" && user.stream === person.stream && user.className);
   const sets = state.sets.filter((questionSet) => questionSet.stream === person.stream);
   const action = `<button class="button button-primary" id="createSet"><span aria-hidden="true">＋</span> New chapter</button>`;
 
-  app.innerHTML = `${pageHeading("TEACHER WORKSPACE", "Make every review count", "Turn your class materials into chapters, then see where students are growing.", action)}
-    <section class="hero-banner" aria-label="Classroom overview">
-      <div class="hero-copy"><p class="eyebrow">ONE STREAM · TWO CLASSROOMS</p><h2>Make room for a little friendly competition.</h2><p>Students in Grade 11A and Grade 11B can challenge one another on the same approved chapter.</p></div>
-      <div class="hero-side"><span class="hero-side-label">Your stream invite code</span><strong class="hero-side-number">SCHOLA11</strong><span class="hero-side-note">Demo code only · demo workspace</span></div>
-    </section>
+  app.innerHTML = `${pageHeading("TEACHER WORKSPACE", escapeHtml(person.stream), "Chapters, classes, and student progress.", action)}
     ${teacherStats(person, students, sets)}
     <nav class="tab-bar" aria-label="Teacher dashboard sections"><button class="tab-button active" data-tab="sets">Chapters</button><button class="tab-button" data-tab="results">Student results</button><button class="tab-button" data-tab="classes">My classes</button></nav>
     <section class="tab-panel active" id="panel-sets"><div class="section-heading"><div><h2>Your chapters</h2><p>Publish a chapter with at least 15 approved questions to unlock ranked matches.</p></div><span class="small">${sets.length} total</span></div><div class="card-grid">${sets.map(renderSetCard).join("") || emptyState("No chapters yet", "Create a chapter to give your students something to review.")}</div></section>
@@ -407,6 +405,8 @@ function renderTeacher(person) {
   bindTabs();
   document.getElementById("createSet").addEventListener("click", () => openSetEditor());
   document.querySelectorAll("[data-edit-set]").forEach((button) => button.addEventListener("click", () => openSetEditor(button.dataset.editSet)));
+  document.querySelectorAll("[data-remove-demo-student]").forEach((button) => button.addEventListener("click", () => removeDemoStudent(button.dataset.removeDemoStudent)));
+  document.querySelectorAll("[data-student-profile]").forEach((button) => button.addEventListener("click", () => openStudentProfile(button.dataset.studentProfile)));
   document.getElementById("addStudent").addEventListener("click", () => openAddStudent(person));
 }
 
@@ -420,6 +420,45 @@ function emptyState(title, detail) {
   return `<div class="empty-state"><strong>${title}</strong>${detail}</div>`;
 }
 
+function studentProfileButton(student) {
+  return `<button class="profile-name-button" type="button" data-student-profile="${escapeHtml(student.id)}" aria-label="View ${escapeHtml(student.name)}'s student profile">${escapeHtml(student.name)}</button>`;
+}
+
+function openStudentProfile(studentId) {
+  const teacher = currentUser();
+  const student = state.users.find((user) => user.id === studentId && user.role === "student" && user.stream === teacher.stream && user.className);
+  if (teacher.role !== "teacher" || !student) return;
+  const sets = state.sets.filter((questionSet) => questionSet.stream === teacher.stream);
+  const matches = matchesForStudent(student).filter((battle) => sets.some((questionSet) => questionSet.id === battle.setId));
+  const completed = matches.filter((battle) => ["done", "forfeit", "void"].includes(battle.status));
+  const scored = completed.filter((battle) => battle.attempts[student.id]?.submitted);
+  const correct = scored.reduce((sum, battle) => sum + calculateScore(battle, student.id), 0);
+  const total = scored.reduce((sum, battle) => sum + battle.questions.length, 0);
+  const wins = completed.filter((battle) => battle.winner === student.id).length;
+  const metric = (value, label) => `<div class="profile-metric"><strong>${value}</strong><span>${label}</span></div>`;
+  const chapters = sets.filter((questionSet) => questionSet.published && (questionSet.classNames.includes(student.className) || matches.some((battle) => battle.setId === questionSet.id)));
+  const chapterRows = chapters.map((questionSet) => {
+    const chapterMatches = completed.filter((battle) => battle.setId === questionSet.id);
+    const chapterScored = chapterMatches.filter((battle) => battle.attempts[student.id]?.submitted);
+    const chapterCorrect = chapterScored.reduce((sum, battle) => sum + calculateScore(battle, student.id), 0);
+    const chapterTotal = chapterScored.reduce((sum, battle) => sum + battle.questions.length, 0);
+    return `<tr><td><strong>${escapeHtml(questionSet.title)}</strong><div class="small">${escapeHtml(questionSet.subject || "General")}</div></td><td>${chapterMatches.length}</td><td>${chapterCorrect} / ${chapterTotal}</td><td>${chapterTotal ? `${Math.round(chapterCorrect / chapterTotal * 100)}%` : "-"}</td></tr>`;
+  }).join("");
+  const recentRows = [...matches].sort((first, second) => (second.acceptedAt || second.createdAt || 0) - (first.acceptedAt || first.createdAt || 0)).slice(0, 8).map((battle) => {
+    const opponent = state.users.find((user) => user.id === battle.participants.find((id) => id !== student.id));
+    const resolved = ["done", "forfeit", "void"].includes(battle.status);
+    const result = battle.status === "done" ? battle.winner === student.id ? "Win" : battle.winner ? "Loss" : "Draw"
+      : battle.status === "forfeit" ? battle.winner === student.id ? "Won by forfeit" : "Lost by forfeit"
+        : battle.status === "void" ? "No contest" : battle.status === "active" ? "In progress"
+          : battle.status === "pending" ? "Invitation pending" : battle.status === "expired" ? "Expired" : "Cancelled";
+    const score = resolved && battle.attempts[student.id]?.submitted ? `${calculateScore(battle, student.id)} / ${battle.questions.length}` : "-";
+    const date = new Date(battle.acceptedAt || battle.createdAt);
+    return `<tr><td>${escapeHtml(opponent?.name || "Former student")}<div class="small">${escapeHtml(findSet(battle.setId)?.title || "Chapter")}</div></td><td>${result}</td><td>${score}</td><td>${Number.isNaN(date.getTime()) ? "-" : escapeHtml(date.toLocaleDateString())}</td></tr>`;
+  }).join("");
+  openModal(`<div class="student-profile"><div class="modal-header"><p class="eyebrow">STUDENT PROFILE</p><button class="button button-quiet" type="button" data-close-modal>Close</button></div><div class="profile-heading"><span class="profile-avatar" aria-hidden="true">${escapeHtml(student.name.slice(0, 1))}</span><div class="profile-identity"><h2 id="modalTitle">${escapeHtml(student.name)}</h2><p>${escapeHtml(student.className)} · ${escapeHtml(student.stream)}</p></div></div><div class="profile-metrics">${metric(getStreamRating(student.id), "ELO rating")}${metric(completed.length, "Matches resolved")}${metric(wins, "Wins")}${metric(total ? `${Math.round(correct / total * 100)}%` : "-", "Accuracy")}${metric(`${correct} / ${total}`, "Correct answers")}${metric(matches.filter((battle) => battle.status === "active").length, "Active matches")}</div><section class="profile-section"><h3>Chapter progress</h3>${chapterRows ? `<div class="table-wrap"><table class="profile-table"><thead><tr><th>Chapter</th><th>Matches</th><th>Correct answers</th><th>Accuracy</th></tr></thead><tbody>${chapterRows}</tbody></table></div>` : emptyState("No chapters assigned", "Chapter progress will appear when a chapter is available to this student.")}</section><section class="profile-section"><h3>Recent matches</h3>${recentRows ? `<div class="table-wrap"><table class="profile-table"><thead><tr><th>Opponent / chapter</th><th>Result</th><th>Correct answers</th><th>Date</th></tr></thead><tbody>${recentRows}</tbody></table></div>` : emptyState("No matches yet", "This student has not started a ranked match.")}</section></div>`);
+  modal.querySelector("[data-close-modal]").addEventListener("click", closeModal);
+}
+
 function renderTeacherResults(students, sets) {
   if (!sets.length || !students.length) return emptyState("Results will appear here", "Publish a chapter and invite students to start collecting ranked match results.");
 
@@ -429,7 +468,7 @@ function renderTeacherResults(students, sets) {
     const correct = scoredMatches.reduce((total, battle) => total + calculateScore(battle, student.id), 0);
     const total = scoredMatches.reduce((sum, battle) => sum + battle.questions.length, 0);
     const wins = matches.filter((battle) => battle.winner === student.id).length;
-    return `<tr><td><span class="rank-number ${studentRank(students, student.id) <= 3 ? "rank-top" : ""}">${studentRank(students, student.id)}</span></td><td><strong>${escapeHtml(student.name)}</strong><div class="small">${escapeHtml(student.className)}</div></td><td><strong class="leaderboard-rating">${getStreamRating(student.id)}</strong> ELO</td><td>${matches.length}</td><td><strong>${correct} / ${total}</strong></td><td>${wins}</td></tr>`;
+    return `<tr><td><span class="rank-number ${studentRank(students, student.id) <= 3 ? "rank-top" : ""}">${studentRank(students, student.id)}</span></td><td>${studentProfileButton(student)}<div class="small">${escapeHtml(student.className)}</div></td><td><strong class="leaderboard-rating">${getStreamRating(student.id)}</strong> ELO</td><td>${matches.length}</td><td><strong>${correct} / ${total}</strong></td><td>${wins}</td></tr>`;
   }).join("");
 
   return `<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Student</th><th>Stream rating</th><th>Ranked matches</th><th>Correct answers</th><th>Wins</th></tr></thead><tbody>${rows}</tbody></table></div>${renderTeacherChapterProgress(students, sets)}`;
@@ -449,18 +488,29 @@ function renderTeacherChapterProgress(students, sets) {
       const correct = scoredMatches.reduce((total, battle) => total + calculateScore(battle, student.id), 0);
       const total = scoredMatches.reduce((sum, battle) => sum + battle.questions.length, 0);
       const wins = matches.filter((battle) => battle.winner === student.id).length;
-      return `<tr><td><strong>${escapeHtml(student.name)}</strong></td><td>${escapeHtml(student.className)}</td><td>${matches.length}</td><td>${correct} / ${total}</td><td>${wins}</td></tr>`;
+      return `<tr><td>${studentProfileButton(student)}</td><td>${escapeHtml(student.className)}</td><td>${matches.length}</td><td>${correct} / ${total}</td><td>${wins}</td></tr>`;
     }).join("");
     return `<section class="chapter-progress-section"><div class="section-heading"><div><h3>${escapeHtml(questionSet.title)}</h3><p>${escapeHtml(questionSet.subject || "General")} · ${questionSet.classNames.map(escapeHtml).join(", ")}</p></div></div>${rows ? `<div class="table-wrap"><table><thead><tr><th>Student</th><th>Class</th><th>Completed matches</th><th>Correct answers</th><th>Wins</th></tr></thead><tbody>${rows}</tbody></table></div>` : emptyState("No students assigned", "Assign a class to this chapter to track its results.")}</section>`;
   }).join("")}</div>`;
 }
 
 function renderClasses(students) {
-  const classNames = [...new Set(students.map((student) => student.className))].sort();
+  const classNames = [...new Set(students.map((student) => student.className).filter(Boolean))].sort();
   return `<div class="callout"><p class="callout-copy">This invite code is only a visual placeholder in the prototype. Students are added here as demo profiles and switch users from the top-right menu.</p><span class="code-chip">SCHOLA11</span></div><div class="class-grid">${classNames.map((className) => {
     const members = rankedStudents(students.filter((student) => student.className === className));
-    return `<article class="surface-card class-card"><div class="class-card-head"><div><h3>${escapeHtml(className)}</h3><span class="small">${members.length} students · ranked by ELO</span></div><span class="class-chip">CLASS</span></div><div class="class-list">${members.map((student) => `<div class="player-block"><span class="avatar">${escapeHtml(student.name.slice(0, 1))}</span><div class="player-copy"><strong>${escapeHtml(student.name)}</strong><span class="small">#${studentRank(members, student.id)} in class</span></div><span class="class-rating">${getStreamRating(student.id)} <small>ELO</small></span></div>`).join("")}</div></article>`;
+    return `<article class="surface-card class-card"><div class="class-card-head"><div><h3>${escapeHtml(className)}</h3><span class="small">${members.length} students · ranked by ELO</span></div><span class="class-chip">CLASS</span></div><div class="class-list">${members.map((student) => `<div class="class-member-row"><div class="player-block"><span class="avatar">${escapeHtml(student.name.slice(0, 1))}</span><div class="player-copy">${studentProfileButton(student)}<span class="small">#${studentRank(members, student.id)} in class</span></div><span class="class-rating">${getStreamRating(student.id)} <small>ELO</small></span></div><button class="button button-quiet" type="button" data-remove-demo-student="${escapeHtml(student.id)}" aria-label="Remove ${escapeHtml(student.name)} from ${escapeHtml(className)}">Remove</button></div>`).join("")}</div></article>`;
   }).join("") || emptyState("No students yet", "Add a demo student to preview the class list.")}</div>`;
+}
+
+function removeDemoStudent(studentId) {
+  const student = state.users.find((user) => user.id === studentId && user.role === "student");
+  if (!student || !window.confirm(`Remove ${student.name} from ${student.className}? Their account and match history will remain.`)) return;
+  state.battles.filter((battle) => battle.status === "pending" && battle.participants.includes(student.id))
+    .forEach((battle) => { battle.status = "cancelled"; battle.pendingFor = null; });
+  student.className = "";
+  saveState();
+  render();
+  showToast(`${student.name} was removed from the class.`);
 }
 
 function openAddStudent(teacher) {
@@ -588,7 +638,7 @@ function renderLeaderboard(title, description, students, activeStudent, showClas
 }
 
 function renderStudentLeaderboards(student) {
-  const streamStudents = state.users.filter((user) => user.role === "student" && user.stream === student.stream);
+  const streamStudents = state.users.filter((user) => user.role === "student" && user.stream === student.stream && user.className);
   const classStudents = streamStudents.filter((user) => user.className === student.className);
   const streamRank = studentRank(streamStudents, student.id);
   const classRank = studentRank(classStudents, student.id);
@@ -608,9 +658,12 @@ function renderStudent(student) {
   const sets = studentQuestionSets(student);
   const pending = matchesForStudent(student).filter((battle) => ["pending", "active"].includes(battle.status));
   const performance = studentPerformance(student);
-  app.innerHTML = `${pageHeading(`STUDENT · ${escapeHtml(student.className)}`, `Welcome back, ${escapeHtml(student.name)}.`, "Pick a chapter, challenge someone from your stream, and use every match as a chance to learn.")}
-    <section class="hero-banner" aria-label="Student overview"><div class="hero-copy"><p class="eyebrow">YOUR LEARNING ARENA</p><h2>Small rounds. Stronger recall.</h2><p>Play a few ranked matches, then revisit the full chapter at your own pace.</p></div><div class="hero-side"><span class="hero-side-label">Ranked matches played</span><strong class="hero-side-number">${performance.completed.length}</strong><span class="hero-side-note">Each chapter set has its own three-match limit.</span></div></section>
-    <div class="stats-grid student-stats">${statCard("⚔", performance.completed.length, "Matches resolved")}${statCard("✦", performance.wins, "Wins")}${statCard("✓", `${performance.correct} / ${performance.total}`, "Correct answers")}${statCard("◈", `${getStreamRating(student.id)} ELO`, "Stream rating")}</div>
+  const streamStudents = state.users.filter((user) => user.role === "student" && user.stream === student.stream && user.className);
+  const streamRank = studentRank(streamStudents, student.id);
+  const classRank = studentRank(streamStudents.filter((user) => user.className === student.className), student.id);
+  app.innerHTML = `${pageHeading(`STUDENT · ${escapeHtml(student.className || "NO CLASS")}`, `Welcome back, ${escapeHtml(student.name)}.`, student.className ? "Pick a chapter, challenge someone from your stream, and use every match as a chance to learn." : "You are not currently assigned to a class. Ask your teacher for access to a class.")}
+    <section class="rating-overview" aria-label="Your rating"><div class="rating-main"><span class="eyebrow">YOUR ELO</span><div class="rating-number">${getStreamRating(student.id)} <span>ELO</span></div><span class="small">${escapeHtml(student.stream)}</span></div><div class="rating-meta"><div><span>Stream rank</span><strong>${streamRank ? `#${streamRank}` : "-"}</strong></div><div><span>Class rank</span><strong>${classRank ? `#${classRank}` : "-"}</strong></div><div><span>Active matches</span><strong>${pending.filter((battle) => battle.status === "active").length}</strong></div></div></section>
+    <div class="stats-grid student-stats">${statCard("⚔", performance.completed.length, "Matches resolved")}${statCard("✦", performance.wins, "Wins")}${statCard("✓", `${performance.correct} / ${performance.total}`, "Correct answers")}${statCard("◈", performance.total ? `${Math.round(performance.correct / performance.total * 100)}%` : "-", "Answer accuracy")}</div>
     <nav class="tab-bar" aria-label="Student sections"><button class="tab-button active" data-tab="play">Play</button><button class="tab-button" data-tab="challenges">Challenges <span class="tab-count">${pending.length}</span></button><button class="tab-button" data-tab="leaderboard">Class & rankings</button><button class="tab-button" data-tab="practice">Practice</button><button class="tab-button" data-tab="history">Match history</button></nav>
     <section class="tab-panel active" id="panel-play"><div class="section-heading"><div><h2>Choose a chapter</h2><p>Face any student in ${escapeHtml(student.stream)} whose class has access to the chapter.</p></div></div><div class="card-grid">${sets.map((questionSet) => renderStudentSet(questionSet, student)).join("") || emptyState("No chapters available yet", "Your teacher’s published chapters will show up here.")}</div><div class="section-heading"><div><h2>Your active matches</h2><p>Finish your answers now or come back later.</p></div></div>${renderBattleList(pending, student)}</section>
     <section class="tab-panel" id="panel-challenges"><div class="section-heading"><div><h2>Challenges</h2><p>Accept an incoming match or finish one you already started.</p></div></div>${renderBattleList(pending, student)}</section>
@@ -928,7 +981,9 @@ window.scholaOpenQuiz = openQuiz;
 
 window.addEventListener("storage", (event) => {
   if (event.key === STORAGE_KEY) {
+    const previousUserId = state.activeUserId;
     state = loadState();
+    if (state.activeUserId !== previousUserId) closeModal();
     render();
   }
 });
