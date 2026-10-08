@@ -637,8 +637,9 @@ function renderBattleList(battles, student) {
 
 function formatTimeRemaining(deadlineAt) {
   const remaining = Math.max(0, deadlineAt - Date.now());
-  const hours = Math.floor(remaining / (60 * 60 * 1000));
-  const minutes = Math.ceil((remaining % (60 * 60 * 1000)) / (60 * 1000));
+  const totalMinutes = Math.ceil(remaining / (60 * 1000));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
   return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
