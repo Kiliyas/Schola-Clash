@@ -48,8 +48,12 @@ function statCard(icon, value, label) {
   return `<article class="stat-card"><span class="stat-icon" aria-hidden="true">${escapeHtml(icon)}</span><div><div class="stat-value">${escapeHtml(value)}</div><div class="stat-label">${escapeHtml(label)}</div></div></article>`;
 }
 
+let quizCleanup = null;
+
 function openModal(html) {
   if (!accountSession || !accountProfile) return;
+  quizCleanup?.();
+  quizCleanup = null;
   modal.innerHTML = html;
   modalBackdrop.classList.add("show");
   modalBackdrop.setAttribute("aria-hidden", "false");
@@ -57,16 +61,20 @@ function openModal(html) {
 }
 
 function closeModal() {
+  quizCleanup?.();
+  quizCleanup = null;
   modalBackdrop.classList.remove("show");
   modalBackdrop.setAttribute("aria-hidden", "true");
   modal.innerHTML = "";
 }
 
 function formatTimeRemaining(deadlineAt) {
-  const totalMinutes = Math.ceil(Math.max(0, deadlineAt - Date.now()) / 60000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+  return formatRemainingTime(deadlineAt - Date.now());
+}
+
+function formatRemainingTime(milliseconds) {
+  const seconds = Math.ceil(Math.max(0, milliseconds) / 1000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 function paintAccountStatus() {
@@ -210,21 +218,41 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && modalBackdrop.classList.contains("show")) closeModal();
 });
 
-function openQuiz({ title, questions, initialAnswers, isPractice, deadlineAt = null, onFinish }) {
+function openQuiz({ title, questions, initialAnswers, isPractice, deadlineAt = null, remainingMs = null, onChange, onExpire, onFinish }) {
   const answers = [...initialAnswers];
+  let submitting = false;
+  const timed = !isPractice && deadlineAt !== null;
+  const endsAt = performance.now() + (remainingMs ?? deadlineAt - Date.now());
+  let expiryHandled = false;
+  const timeIsUp = () => timed && performance.now() >= endsAt;
+  const tick = () => {
+    const label = document.getElementById("matchDeadline");
+    if (!label || !timed) return;
+    label.textContent = timeIsUp() ? "Time is up" : `Time left ${formatRemainingTime(endsAt - performance.now())}`;
+    if (!timeIsUp()) return;
+    modal.querySelectorAll(".answer-option, #previousQuestion, #nextQuestion").forEach((button) => { button.disabled = true; });
+    if (!submitting && !expiryHandled) {
+      expiryHandled = true;
+      Promise.resolve().then(() => onExpire?.()).catch((error) => showToast(userErrorMessage(error, "Time is up. Reopen the match to see its result.")));
+    }
+  };
   let index = Math.max(0, answers.findIndex((answer) => answer === null));
   const paint = () => {
     const question = questions[index];
     modal.innerHTML = `<div class="modal-header"><div><p class="eyebrow">${isPractice ? "PRACTICE MODE" : "RANKED MATCH"}</p><h2 id="modalTitle">${escapeHtml(title)}</h2></div><button class="button button-quiet" id="leaveQuiz" aria-label="Close quiz">✕</button></div><div class="quiz-progress-head"><span>Question ${index + 1} of ${questions.length}</span><span id="matchDeadline" data-deadline="${deadlineAt || ""}">${isPractice ? "No rating" : deadlineAt ? `Due in ${formatTimeRemaining(deadlineAt)}` : "Ranked match"}</span></div><div class="progress-track" style="margin-top:9px"><div class="progress-fill" style="width:${(index + 1) / questions.length * 100}%"></div></div><h3 class="quiz-question">${escapeHtml(question.text)}</h3><div class="answer-list">${question.options.map((option, optionIndex) => `<button class="answer-option ${answers[index] === optionIndex ? "selected" : ""}" data-answer="${optionIndex}"><span class="answer-letter">${ANSWER_LABELS[optionIndex]}</span><span>${escapeHtml(option)}</span></button>`).join("")}</div><div class="quiz-footer"><button class="button button-outline" id="previousQuestion" ${index === 0 ? "disabled" : ""}>← Back</button><button class="button button-primary" id="nextQuestion">${index === questions.length - 1 ? isPractice ? "Finish practice" : "Submit answers" : "Next question →"}</button></div>`;
     document.getElementById("leaveQuiz").addEventListener("click", closeModal);
     document.querySelectorAll("[data-answer]").forEach((button) => button.addEventListener("click", () => {
+      if (submitting || timeIsUp()) return;
       answers[index] = Number(button.dataset.answer);
+      onChange?.([...answers]);
       paint();
     }));
     document.getElementById("previousQuestion").addEventListener("click", () => {
+      if (submitting || timeIsUp()) return;
       if (index > 0) { index -= 1; paint(); }
     });
-    document.getElementById("nextQuestion").addEventListener("click", () => {
+    document.getElementById("nextQuestion").addEventListener("click", async () => {
+      if (submitting || timeIsUp()) return tick();
       if (answers[index] === null) return showToast("Choose an answer to continue.");
       if (index < questions.length - 1) { index += 1; paint(); return; }
       if (answers.some((answer) => answer === null)) {
@@ -232,11 +260,26 @@ function openQuiz({ title, questions, initialAnswers, isPractice, deadlineAt = n
         paint();
         return showToast("Answer every question before submitting.");
       }
-      onFinish(answers);
+      submitting = true;
+      const controls = [...modal.querySelectorAll("button")];
+      controls.forEach((button) => { button.disabled = true; });
+      try {
+        await onFinish([...answers]);
+      } catch (error) {
+        showToast(userErrorMessage(error, "Could not submit your answers. Please try again."));
+      } finally {
+        submitting = false;
+        if (controls[0]?.isConnected) paint();
+      }
     });
+    tick();
   };
   openModal("");
   paint();
+  if (timed) {
+    const timer = window.setInterval(tick, 1000);
+    quizCleanup = () => window.clearInterval(timer);
+  }
 }
 
 
@@ -248,10 +291,8 @@ window.scholaUserErrorMessage = userErrorMessage;
 window.scholaRefreshAccount = refreshAccount;
 
 window.setInterval(() => {
-  if (accountSession && accountProfile) window.ScholaLiveApp?.refresh();
-  const deadlineLabel = document.getElementById("matchDeadline");
-  if (deadlineLabel?.dataset.deadline) deadlineLabel.textContent = `Due in ${formatTimeRemaining(Number(deadlineLabel.dataset.deadline))}`;
-}, 60000);
+  if (document.visibilityState === "visible" && accountSession && accountProfile) window.ScholaLiveApp?.refresh();
+}, 10000);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && accountSession && accountProfile) window.ScholaLiveApp?.refresh();
 });

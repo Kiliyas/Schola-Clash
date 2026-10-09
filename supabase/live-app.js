@@ -14,6 +14,28 @@
   const errorMessage = (error, fallback) => window.scholaUserErrorMessage?.(error, fallback) || fallback;
   const isCurrentUser = (userId) => userId === model.userId && userId === context?.session?.user?.id;
 
+  const draftPrefix = "schola-match-draft:";
+  function matchDraft(userId, matchId, fingerprint, deadline, answers) {
+    const key = `${draftPrefix}${userId}:${matchId}`;
+    try {
+      if (answers === null) return localStorage.removeItem(key);
+      // Expired drafts are removed without retaining account or question content.
+      for (const storedKey of Object.keys(localStorage).filter((item) => item.startsWith(draftPrefix))) {
+        try {
+          const stored = JSON.parse(localStorage.getItem(storedKey));
+          if (!Number.isFinite(stored?.deadline) || stored.deadline <= Date.now()) localStorage.removeItem(storedKey);
+        } catch { localStorage.removeItem(storedKey); }
+      }
+      if (answers !== undefined) {
+        if (deadline > Date.now()) localStorage.setItem(key, JSON.stringify({ fingerprint, deadline, answers }));
+        return;
+      }
+      const draft = JSON.parse(localStorage.getItem(key));
+      return draft?.fingerprint === fingerprint && draft.deadline === deadline && deadline > Date.now() && Array.isArray(draft.answers)
+        ? draft.answers : [];
+    } catch { return []; }
+  }
+
   async function rows(query) {
     const { data, error } = await query;
     if (error) throw error;
@@ -118,8 +140,12 @@
     try {
       const data = model.role === "teacher" ? await loadTeacherData(userId) : await loadStudentData(userId);
       if (generation !== loadGeneration) return;
+      const knownMatches = new Set((model.matches || []).map((match) => match.id));
+      const newTimedMatch = hadData && model.role === "student" && data.matches.find((match) => match.status === "active" && !knownMatches.has(match.id));
       Object.assign(model, data, { loaded: true, loading: false, error: null });
+      if (newTimedMatch) model.activeTab = "matches";
       renderBody();
+      if (newTimedMatch) toast("Your timed match has started. Open it now; the timer is running.");
     } catch (error) {
       if (generation !== loadGeneration) return;
       Object.assign(model, { loaded: false, loading: false, error });
@@ -165,6 +191,7 @@
 
   function refresh() {
     if (!context?.session?.user) return;
+    if (model.loading) return;
     model.error = null;
     return loadData();
   }
@@ -582,7 +609,7 @@
         : `<button class="button button-outline" data-live-cancel="${escape(challenge.id)}">Cancel</button>`;
       return `<article class="surface-card challenge-card"><div class="player-block"><span class="avatar">${escape((person?.display_name || "S").slice(0, 1).toUpperCase())}</span><div class="player-copy"><strong>${escape(person?.display_name || "Classmate")} · ${escape(chapter?.title || "Chapter")}</strong><span class="small">${challenge.opponent_id === model.userId ? "Invited you" : "Waiting for your classmate"} · expires ${new Date(challenge.expires_at).toLocaleString()}</span></div></div>${action}</article>`;
     }).join("")}</div>` : `<div class="empty-state"><strong>No open invitations</strong>Send a challenge from one of your chapters and it will appear here.</div>`;
-    const matchesMarkup = matches.length ? `<div class="section-heading"><div><h2>Your matches</h2><p>Answer before the 24-hour deadline. Your opponent can play later.</p></div></div><div class="live-list">${matches.map((match) => {
+    const matchesMarkup = matches.length ? `<div class="section-heading"><div><h2>Your matches</h2><p>Timed matches start when accepted. The timer keeps running if you leave.</p></div></div><div class="live-list">${matches.map((match) => {
       const opponentId = match.player_one_id === model.userId ? match.player_two_id : match.player_one_id;
       const person = model.people.find((entry) => entry.id === opponentId);
       const chapter = model.chapters.find((entry) => entry.id === match.chapter_id);
@@ -656,12 +683,14 @@
   }
 
   async function acceptChallenge(challengeId, button) {
+    const userId = model.userId;
+    if (!window.confirm("Start the timed match now? Both players get one minute per question, with at least five minutes total. The shared timer starts immediately and cannot be paused. Make sure your classmate is ready.")) return;
     button.disabled = true;
     try {
       const { data, error } = await client.rpc("accept_challenge", { p_challenge_id: challengeId });
       if (error) throw error;
       const messages = {
-        active: "Match accepted. You have 24 hours to submit.",
+        active: "Timed match started. The timer is running for both players.",
         accepted: "This invitation has already been accepted.",
         cancelled: "This invitation was cancelled.",
         expired: "This invitation has expired.",
@@ -669,6 +698,7 @@
       };
       toast(messages[data.status] || "This invitation is no longer available.");
       await refresh();
+      if (data.status === "active" && data.match_id && isCurrentUser(userId)) await openMatch(data.match_id);
     } catch (error) {
       button.disabled = false;
       toast(errorMessage(error, "Could not accept this invitation."));
@@ -693,6 +723,7 @@
     try {
       const current = model.matches.find((match) => match.id === matchId);
       const { data: refreshed, error: refreshError } = await client.rpc("refresh_match", { p_match_id: matchId });
+      const receivedAt = performance.now();
       if (refreshError) throw refreshError;
       if (!isCurrentUser(userId)) return;
       const match = { ...current, ...refreshed };
@@ -702,6 +733,7 @@
         one(client.from("match_attempts").select("answers, submitted_at").eq("match_id", matchId).eq("user_id", model.userId).maybeSingle()),
       ]);
       if (!isCurrentUser(userId)) return;
+      if (match.status !== "active" || ownAttempt?.submitted_at) matchDraft(userId, matchId, null, null, null);
       if (match.status === "completed") return await showMatchResult(match, questions, ownOrders, ownAttempt);
       if (["forfeit", "no_contest"].includes(match.status)) return showMatchStatus(match);
       if (ownAttempt?.submitted_at) {
@@ -715,21 +747,44 @@
         return { text: question.prompt, options: order.map((index) => question.options[index]) };
       });
       const savedAnswers = Array.isArray(ownAttempt?.answers) ? ownAttempt.answers.map(Number) : [];
-      const initialAnswers = quizQuestions.map((_, index) => Number.isInteger(savedAnswers[index]) ? savedAnswers[index] : null);
+      const deadline = new Date(match.deadline_at).getTime();
+      const fingerprint = JSON.stringify(questions.map((question) => [question.id, orderMap[question.id]]));
+      const draftAnswers = matchDraft(userId, matchId, fingerprint, deadline);
+      const initialAnswers = quizQuestions.map((question, index) => {
+        const answer = savedAnswers[index] ?? draftAnswers[index];
+        return Number.isInteger(answer) && answer >= 0 && answer < question.options.length ? answer : null;
+      });
       if (typeof window.scholaOpenQuiz !== "function") throw new Error("The match interface could not be loaded. Reload the page and try again.");
       window.scholaOpenQuiz({
         title: model.chapters.find((chapter) => chapter.id === match.chapter_id)?.title || "Ranked match",
         questions: quizQuestions,
         initialAnswers,
         isPractice: false,
-        deadlineAt: new Date(match.deadline_at).getTime(),
+        deadlineAt: deadline,
+        remainingMs: refreshed.server_now ? deadline - new Date(refreshed.server_now).getTime() - (performance.now() - receivedAt) : null,
+        onExpire: async () => {
+          if (isCurrentUser(userId)) await openMatch(matchId);
+        },
+        onChange: (answers) => {
+          if (isCurrentUser(userId)) matchDraft(userId, matchId, fingerprint, deadline, answers);
+        },
         onFinish: async (answers) => {
-          const { data, error } = await client.rpc("submit_match_answers", { p_match_id: matchId, p_answers: answers });
+          if (!isCurrentUser(userId)) return;
+          let response;
+          try {
+            response = await client.rpc("submit_match_answers", { p_match_id: matchId, p_answers: answers });
+          } catch (error) {
+            if (isCurrentUser(userId)) throw error;
+            return;
+          }
+          if (!isCurrentUser(userId)) return;
+          const { data, error } = response;
           if (error) return toast(errorMessage(error, "Could not submit your answers."));
+          matchDraft(userId, matchId, null, null, null);
           closeModal();
-          toast(data.waiting_for_opponent ? "Answers submitted. Waiting for your opponent." : data.status === "completed" ? "Match complete. Results are ready." : "Answers submitted.");
+          toast(["forfeit", "no_contest"].includes(data.status) ? "Time is up. Late answers were not accepted." : data.waiting_for_opponent ? "Answers submitted. Waiting for your opponent." : data.status === "completed" ? "Match complete. Results are ready." : "Answers submitted.");
           await refresh();
-          if (data.status === "completed") openMatch(matchId);
+          if (isCurrentUser(userId) && ["completed", "forfeit", "no_contest"].includes(data.status)) await openMatch(matchId);
         },
       });
     } catch (error) {
@@ -779,6 +834,12 @@
   }
 
   function reset() {
+    if (model.userId) {
+      try {
+        Object.keys(localStorage).filter((key) => key.startsWith(`${draftPrefix}${model.userId}:`))
+          .forEach((key) => localStorage.removeItem(key));
+      } catch { /* Storage may be unavailable in private browsing. */ }
+    }
     loadGeneration += 1;
     context = null;
     Object.keys(model).forEach((key) => { delete model[key]; });

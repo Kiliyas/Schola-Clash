@@ -107,10 +107,11 @@ function installSupabaseStub(fixtures) {
         insert() { return blockedWrite(`${table}.insert`); },
         update() { return blockedWrite(`${table}.update`); },
         delete() { return blockedWrite(`${table}.delete`); },
-        then(resolve, reject) {
+        async then(resolve, reject) {
           try {
             if (!Object.hasOwn(fixtures.tables, table)) throw new Error(`Missing fixture table: ${table}`);
-            let data = fixtures.tables[table].filter((row) => predicates.every((predicate) => predicate(row)));
+            const tableRows = window.__workflowRows ? await window.__workflowRows(table) : fixtures.tables[table];
+            let data = tableRows.filter((row) => predicates.every((predicate) => predicate(row)));
             if (ordering) data.sort((a, b) => String(a[ordering.key]).localeCompare(String(b[ordering.key])) * (ordering.ascending ? 1 : -1));
             data = data.slice(0, count);
             const result = { data: single ? data[0] || null : data, error: null };
@@ -128,6 +129,7 @@ function installSupabaseStub(fixtures) {
       return query;
     },
     rpc(name, args) {
+      if (window.__workflowRPC) return window.__workflowRPC(name, args).finally(() => { window.__workflowSettled = name; });
       if (fixtures.role === "server-error") return Promise.resolve({ data: null, error: { code: "PGRST202", message: "Could not find the function public.get_teacher_chapter_progress in Supabase schema cache" } });
       if (name === "get_practice_questions") return Promise.resolve({ data: [
         { prompt: "First practice question", options: ["First", "Second", "Third", "Fourth"], correct_option_index: 0, explanation: "Practice explanation" },
@@ -304,4 +306,5 @@ async function run() {
   }
 }
 
-run().catch((error) => { console.error(error); process.exitCode = 1; });
+module.exports = { liveFixtures, installSupabaseStub, assertLayout };
+if (require.main === module) run().catch((error) => { console.error(error); process.exitCode = 1; });
