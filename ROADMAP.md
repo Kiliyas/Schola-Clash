@@ -12,7 +12,7 @@ The browser is online-only, with authenticated student and teacher workspaces. T
 - Deployment check: acceptance, submission, and match refresh functions use row locks and cannot be executed by the anonymous role.
 - Done: short shared ranked timers, second-by-second countdowns anchored to server time, and answering disabled after expiry. Practice remains untimed.
 - Done: transactional database checks of actual duration, immutable deadlines, late-answer rejection, forfeit/no-contest, scoring/ELO, and duplicate completed submissions. All synthetic data is rolled back.
-- Remaining: simultaneous acceptance/submission, match-limit boundaries, and cross-class access checks in a disposable classroom. Browser fixtures do not establish these guarantees.
+- Passed locally: independent PostgreSQL sessions for simultaneous acceptance/submission and the three-match boundary, plus SQL cross-class access checks. Repeat the integration suite in a disposable hosted Supabase project before deployment.
 
 Account recovery, display-name editing, and first-use onboarding are implemented in the browser. Recovery email delivery and allowed redirect URLs still need a live deployment check. After this phase, verify security and operational recovery, run a small classroom pilot, and prioritize new features from its feedback. Material generation and additional game modes are deferred until after the pilot.
 
@@ -83,6 +83,13 @@ Consider online live duels only if pilot feedback supports them. Consider speed 
 
 ## Next work session
 
-1. Add an opt-in backend integration suite using dedicated accounts and a disposable classroom, with no normal-user data changes.
-2. Test simultaneous requests, ELO calculation, deadlines, match limits, and unauthorized access against the actual database.
-3. Verify recovery email delivery and allowed redirect URLs on the deployment, then prepare operational recovery and a one-class pilot.
+1. Prepare and verify an encrypted backup in an approved administrator environment, then review the exact pending migration.
+2. Run the implemented integration suite in a disposable hosted Supabase project and deploy the approved migration before the frontend.
+3. Configure SMTP and verify confirmation/recovery delivery and redirects with a registered test account. The classroom pilot is excluded from the current request.
+
+## Reliability implementation prepared on 2026-10-09
+
+- Implemented locally: chapter draft autosave/restore and close protection; archive/restore/copy/unpublish; class rename; confirmation resend and account requests; missed-question practice and separate student/teacher learning progress; private error-code reporting; retention rules; encrypted backup tooling; CI and an opt-in concurrent-session database suite.
+- Passed: desktop and mobile browser workflows, isolated PostgreSQL migration replay and RLS/scoring/lifecycle tests, native PostgreSQL concurrent acceptance/submission and match-limit boundary tests, isolated snapshot data restoration, and backup-tool safety tests. Native concurrency fixtures were cleaned up. The existing timed-match transaction test also passed on live Supabase and rolled back its synthetic data.
+- Pending external work: explicit approval and backup before applying the exact live migration, disposable Supabase concurrency testing, SMTP/test-account delivery validation, and restoring a real encrypted backup. Automatic approval review rejected the live migration and committed live concurrency fixtures; neither was executed.
+- No classroom pilot was performed, as requested.

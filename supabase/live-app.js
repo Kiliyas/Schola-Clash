@@ -67,8 +67,8 @@
     if (!streams.length) return { streams, classes: [], chapters: [], assignments: [], invites: [], members: [], people: [], matches: [], ratings: [], chapterProgress: [] };
     const streamIds = streams.map((stream) => stream.id);
     const [classes, chapters] = await Promise.all([
-      rows(client.from("classrooms").select("id, stream_id, name, created_at").in("stream_id", streamIds).order("created_at")),
-      rows(client.from("chapters").select("id, stream_id, title, subject, published_at, created_at").in("stream_id", streamIds).order("created_at", { ascending: false })),
+      rows(client.from("classrooms").select("id, stream_id, name, created_at, archived_at").in("stream_id", streamIds).order("created_at")),
+      rows(client.from("chapters").select("id, stream_id, title, subject, published_at, created_at, updated_at, archived_at").in("stream_id", streamIds).order("created_at", { ascending: false })),
     ]);
     const classIds = classes.map((item) => item.id);
     const chapterIds = chapters.map((item) => item.id);
@@ -83,13 +83,14 @@
       rows(client.from("stream_ratings").select("stream_id, user_id, rating").in("stream_id", streamIds)),
     ]);
     const chapterProgress = progressByStream.flat();
+    const practiceProgress = (await Promise.all(streamIds.map((streamId) => rows(client.rpc("get_learning_progress", { p_stream_id: streamId }))))).flat();
     const memberIds = [...new Set(members.map((member) => member.user_id))];
     const people = memberIds.length
       ? await rows(client.from("user_profiles").select("id, display_name, role").in("id", memberIds))
       : [];
     const questionCounts = Object.fromEntries(chapters.map((chapter) => [chapter.id, 0]));
     questionRows.forEach((question) => { questionCounts[question.chapter_id] = (questionCounts[question.chapter_id] || 0) + 1; });
-    return { streams, classes, chapters, assignments, invites, members, people, questionCounts, matches, chapterProgress, ratings };
+    return { streams, classes, chapters, assignments, invites, members, people, questionCounts, matches, chapterProgress, practiceProgress, ratings };
   }
 
   async function loadStudentData(userId) {
@@ -127,7 +128,8 @@
       : [];
     const questionCounts = Object.fromEntries(chapters.map((chapter) => [chapter.id, 0]));
     questionRows.forEach((question) => { questionCounts[question.chapter_id] = (questionCounts[question.chapter_id] || 0) + 1; });
-    return { streams, classes, chapterLinks, chapters, members, people, challenges, matches, ratings, attempts, questionCounts };
+    const practiceProgress = await rows(client.rpc("get_learning_progress"));
+    return { streams, classes, chapterLinks, chapters, members, people, challenges, matches, ratings, attempts, questionCounts, practiceProgress };
   }
 
   async function loadData() {
@@ -209,7 +211,7 @@
 
   function renderTeacher() {
     const stream = model.streams[0];
-    const classCount = model.classes.length;
+    const classCount = model.classes.filter((classroom) => !classroom.archived_at).length;
     const studentCount = new Set(model.members.map((member) => member.user_id)).size;
     const publishedCount = model.chapters.filter((chapter) => chapter.published_at).length;
     const createChapter = stream && classCount
@@ -218,9 +220,9 @@
       ${stream ? `
         <div class="stats-grid">${statCard("▤", publishedCount, "Published chapters")}${statCard("♙", studentCount, "Students connected")}${statCard("▦", classCount, "Classes")}</div>
         <nav class="tab-bar" aria-label="Teacher workspace sections"><button class="tab-button active" data-live-tab="chapters">Chapters</button><button class="tab-button" data-live-tab="results">Results</button><button class="tab-button" data-live-tab="classes">Classes</button></nav>
-        <section class="tab-panel active" data-live-panel="chapters"><div class="section-heading"><div><h2>Your chapters</h2><p>Drafts stay private. Published chapters are available to their assigned classes.</p></div><span class="small">${model.chapters.length} total</span></div><div class="card-grid">${model.chapters.map(renderTeacherChapter).join("") || `<div class="empty-state"><strong>No chapters yet</strong>Create your first chapter for your classes.</div>`}</div>${classCount ? "" : `<div class="empty-state"><strong>Add your first class</strong>Next, create a class, generate its join code, and share it with your students.<button class="button button-primary" id="liveAddFirstClass">Add class</button></div>`}</section>
-        <section class="tab-panel" data-live-panel="results">${renderTeacherResults()}</section>
-        <section class="tab-panel" data-live-panel="classes"><div class="section-heading"><div><h2>Your classes</h2><p>Share a class code so students can join with their own account.</p></div><button class="button button-secondary" id="liveAddClass">＋ Add class</button></div><div class="class-grid">${model.classes.map(renderTeacherClass).join("") || `<div class="empty-state"><strong>No classes yet</strong>Add your first class to invite students and publish chapters.</div>`}</div></section>`
+        <section class="tab-panel active" data-live-panel="chapters"><div class="section-heading"><div><h2>Your chapters</h2><p>Drafts stay private. Published chapters are available to their assigned classes.</p></div><span class="small">${model.chapters.length} total</span></div><div class="card-grid">${model.chapters.filter((chapter) => !chapter.archived_at).map(renderTeacherChapter).join("") || `<div class="empty-state"><strong>No chapters yet</strong>Create your first chapter for your classes.</div>`}</div>${classCount ? "" : `<div class="empty-state"><strong>Add your first class</strong>Next, create a class, generate its join code, and share it with your students.<button class="button button-primary" id="liveAddFirstClass">Add class</button></div>`}
+        <details class="workspace-archive"><summary>Archived chapters (${model.chapters.filter((chapter) => chapter.archived_at).length})</summary><div class="card-grid">${model.chapters.filter((chapter) => chapter.archived_at).map(renderTeacherChapter).join("") || `<p class="small">No archived chapters.</p>`}</div></details></section><section class="tab-panel" data-live-panel="results">${renderTeacherResults()}${renderPracticeProgress(true)}</section>
+        <section class="tab-panel" data-live-panel="classes"><div class="section-heading"><div><h2>Your classes</h2><p>Share a class code so students can join with their own account.</p></div><button class="button button-secondary" id="liveAddClass">＋ Add class</button></div><div class="class-grid">${model.classes.filter((classroom) => !classroom.archived_at).map(renderTeacherClass).join("") || `<div class="empty-state"><strong>No classes yet</strong>Add your first class to invite students and publish chapters.</div>`}</div><details class="workspace-archive"><summary>Archived classes (${model.classes.filter((classroom) => classroom.archived_at).length})</summary><div class="class-grid">${model.classes.filter((classroom) => classroom.archived_at).map(renderTeacherClass).join("") || `<p class="small">No archived classes.</p>`}</div></details></section>`
         : `<section class="live-onboarding"><div class="live-onboarding-step">01</div><p class="eyebrow">FIRST STEP</p><h2>Create your teaching space</h2><p class="lede">Name your teaching space and add your first classes. You can create invite codes for students as soon as the classes are saved.</p><button class="button button-primary" id="liveCreateStream">Create teaching space <span aria-hidden="true">→</span></button></section>`}`;
 
     root.querySelector("#liveRefresh")?.addEventListener("click", () => refresh());
@@ -229,6 +231,8 @@
     root.querySelector("#liveAddFirstClass")?.addEventListener("click", () => openClassEditor(stream));
     root.querySelector("#liveAddClass")?.addEventListener("click", () => openClassEditor(stream));
     root.querySelectorAll("[data-edit-chapter]").forEach((button) => button.addEventListener("click", () => openChapterEditor(button.dataset.editChapter)));
+    root.querySelectorAll("[data-manage-chapter]").forEach((button) => button.addEventListener("click", () => manageChapter(button)));
+    root.querySelectorAll("[data-manage-class]").forEach((button) => button.addEventListener("click", () => manageClass(button)));
     root.querySelectorAll("[data-new-invite]").forEach((button) => button.addEventListener("click", () => createInvite(button.dataset.newInvite, button)));
     root.querySelectorAll("[data-copy-invite]").forEach((button) => button.addEventListener("click", () => copyInvite(button.dataset.copyInvite)));
     root.querySelectorAll("[data-remove-student]").forEach((button) => button.addEventListener("click", () => removeStudentFromClass(button)));
@@ -258,7 +262,7 @@
     const names = model.classes.filter((item) => assignmentIds.includes(item.id)).map((item) => item.name);
     const published = Boolean(chapter.published_at);
     const count = model.questionCounts?.[chapter.id] || 0;
-    return `<article class="surface-card set-card"><div class="set-card-top"><span class="subject-tag">${escape(chapter.subject || "General")}</span><span class="state-tag ${published ? "published" : ""}">${published ? "Published" : "Draft"}</span></div><span class="set-icon" aria-hidden="true">✳</span><h3>${escape(chapter.title)}</h3><p class="set-meta">${count} questions${names.length ? ` · ${escape(names.join(" · "))}` : ""}</p><div class="set-card-footer">${published ? `<span class="small">Live since ${new Date(chapter.published_at).toLocaleDateString()}</span>` : ""}<button class="button button-outline" data-edit-chapter="${escape(chapter.id)}">${published ? "Edit chapter" : "Continue draft →"}</button></div></article>`;
+    return `<article class="surface-card set-card"><div class="set-card-top"><span class="subject-tag">${escape(chapter.subject || "General")}</span><span class="state-tag ${published ? "published" : ""}">${chapter.archived_at ? "Archived" : published ? "Published" : "Draft"}</span></div><span class="set-icon" aria-hidden="true">✳</span><h3>${escape(chapter.title)}</h3><p class="set-meta">${count} questions${names.length ? ` · ${escape(names.join(" · "))}` : ""}</p><div class="set-card-footer">${published ? `<span class="small">Live since ${new Date(chapter.published_at).toLocaleDateString()}</span>` : ""}${chapter.archived_at ? "" : `<button class="button button-outline" data-edit-chapter="${escape(chapter.id)}">${published ? "Edit chapter" : "Continue draft →"}</button>`}<details class="material-menu"><summary>Manage</summary><div>${(chapter.archived_at ? ["restore", "copy"] : ["copy", ...(published ? ["unpublish"] : []), "archive"]).map((action) => `<button type="button" class="button button-quiet" data-manage-chapter="${escape(chapter.id)}" data-action="${action}">${({copy:"Copy chapter",unpublish:"Unpublish",archive:"Archive",restore:"Restore"})[action]}</button>`).join("")}</div></details></div></article>`;
   }
 
   function renderTeacherClass(classroom) {
@@ -268,7 +272,52 @@
     const memberList = people.length
       ? `<div class="class-list">${people.map((person) => `<div class="class-member-row"><div class="player-block"><span class="avatar">${escape((person.display_name || "S").slice(0, 1).toUpperCase())}</span><div class="player-copy">${studentProfileButton(person)}<span class="small">${studentRating(person.id, classroom.stream_id)} ELO</span></div></div><button class="button button-quiet" type="button" data-remove-student="${escape(classroom.id)}" data-student-id="${escape(person.id)}" data-student-name="${escape(person.display_name)}" aria-label="Remove ${escape(person.display_name)} from ${escape(classroom.name)}">Remove</button></div>`).join("")}</div>`
       : `<div class="empty-state"><strong>No students yet</strong>Share the join code below to invite the class.</div>`;
-    return `<article class="surface-card class-card"><div class="class-card-head"><div><h3>${escape(classroom.name)}</h3><span class="small">${people.length} ${people.length === 1 ? "student" : "students"}</span></div><span class="class-chip">CLASS</span></div>${memberList}<div class="live-invite-box">${invite ? `<div><span class="small">Class join code</span><strong class="live-code">${escape(invite.code.match(/.{1,4}/g).join(" "))}</strong><span class="small">Expires ${new Date(invite.expires_at).toLocaleDateString()}</span></div><button class="button button-outline" data-copy-invite="${escape(invite.code)}">Copy code</button>` : `<span class="small">Create a code to let students join.</span><button class="button button-secondary" data-new-invite="${escape(classroom.id)}">Create join code</button>`}</div></article>`;
+    return `<article class="surface-card class-card"><div class="class-card-head"><div><h3>${escape(classroom.name)}</h3><span class="small">${people.length} ${people.length === 1 ? "student" : "students"}</span></div><span class="class-chip">CLASS</span></div>${classroom.archived_at ? `<p class="small">Archived. Membership and results are retained.</p>` : memberList}<div class="live-invite-box">${classroom.archived_at ? "" : invite ? `<div><span class="small">Class join code</span><strong class="live-code">${escape(invite.code.match(/.{1,4}/g).join(" "))}</strong><span class="small">Expires ${new Date(invite.expires_at).toLocaleDateString()}</span></div><button class="button button-outline" data-copy-invite="${escape(invite.code)}">Copy code</button>` : `<span class="small">Create a code to let students join.</span><button class="button button-secondary" data-new-invite="${escape(classroom.id)}">Create join code</button>`}</div><details class="material-menu"><summary>Manage class</summary><div>${(classroom.archived_at ? ["restore"] : ["rename", "archive"]).map((action) => `<button type="button" class="button button-quiet" data-manage-class="${escape(classroom.id)}" data-action="${action}">${({rename:"Rename",archive:"Archive",restore:"Restore"})[action]}</button>`).join("")}</div></details></article>`;
+  }
+
+  async function manageChapter(button) {
+    const action = button.dataset.action;
+    const chapter = model.chapters.find((item) => item.id === button.dataset.manageChapter);
+    if (["archive", "unpublish"].includes(action) && !window.confirm(`${action === "archive" ? "Archive" : "Unpublish"} “${chapter.title}”? Students cannot start new practice or matches. Existing matches and results remain available.`)) return;
+    button.disabled = true;
+    try {
+      const { data, error } = await client.rpc("manage_chapter", { p_chapter_id: chapter.id, p_action: action });
+      if (error) throw error;
+      await refresh();
+      toast(action === "copy" ? "Chapter copied as a draft." : "Chapter updated.");
+      if (action === "copy") await openChapterEditor(data);
+    } catch (error) { toast(errorMessage(error, "Could not update the chapter. Please try again.")); }
+    finally { button.disabled = false; }
+  }
+  async function manageClass(button) {
+    const action = button.dataset.action;
+    const classroom = model.classes.find((item) => item.id === button.dataset.manageClass);
+    if (action === "rename") {
+      openModal(`<div class="modal-header"><h2 id="modalTitle">Rename class</h2><button type="button" class="button button-quiet" id="closeRenameClass">Close</button></div><form id="renameClassForm"><div class="field"><label for="renameClassName">Class name</label><input id="renameClassName" maxlength="100" value="${escape(classroom.name)}" required></div><p id="renameClassMessage" role="status"></p><button type="submit" class="button button-primary">Save name</button></form>`);
+      document.getElementById("closeRenameClass").addEventListener("click", closeModal);
+      document.getElementById("renameClassForm").addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const submit = event.currentTarget.querySelector("button[type=submit]");
+        const name = document.getElementById("renameClassName").value.trim();
+        if (!name) return;
+        submit.disabled = true;
+        try {
+          const { error } = await client.rpc("manage_class", { p_class_id: classroom.id, p_action: "rename", p_name: name });
+          if (error) throw error;
+          closeModal(); await refresh(); toast("Class renamed.");
+        } catch (error) { document.getElementById("renameClassMessage").textContent = errorMessage(error, "Could not rename the class."); }
+        finally { submit.disabled = false; }
+      });
+      return;
+    }
+    if (action === "archive" && !window.confirm(`Archive “${classroom.name}”? Joining and new chapter access will stop. Membership and results are retained.`)) return;
+    button.disabled = true;
+    try {
+      const { error } = await client.rpc("manage_class", { p_class_id: classroom.id, p_action: action });
+      if (error) throw error;
+      await refresh(); toast("Class updated.");
+    } catch (error) { toast(errorMessage(error, "Could not update the class.")); }
+    finally { button.disabled = false; }
   }
 
   function studentRating(userId, streamId) {
@@ -495,8 +544,31 @@
         });
       });
     };
-    openModal(`<div class="modal-header"><div><p class="eyebrow">CHAPTER EDITOR</p><h2 id="modalTitle">${publishedExisting ? "Edit published chapter" : existing ? "Edit draft" : "Create a chapter"}</h2></div><button class="button button-quiet" id="liveCloseChapter" type="button">Close</button></div><p class="modal-description">${publishedExisting ? "Changes apply to future practice and matches. Existing matches keep their original questions; open invitations will be cancelled." : "Add four choices and a correct answer for each question. At least 15 complete questions are required to publish."}</p><div class="form-grid"><div class="field"><label for="liveChapterTitle">Chapter title</label><input id="liveChapterTitle" maxlength="160" value="${escape(existing?.title || "")}" placeholder="For example, World War I" required></div><div class="field"><label for="liveChapterSubject">Subject</label><input id="liveChapterSubject" maxlength="100" value="${escape(existing?.subject || "")}" placeholder="History"></div></div><div class="field"><span class="field-label">Assign to classes</span><div class="live-check-list">${model.classes.map((classroom) => `<label><input type="checkbox" value="${escape(classroom.id)}" ${selected.has(classroom.id) || (!existing && model.classes.length === 1) ? "checked" : ""}><span>${escape(classroom.name)}</span></label>`).join("")}</div></div><div class="question-editor chapter-question-editor"><div class="live-editor-heading"><h3>Questions <span class="small" id="liveQuestionCount"></span></h3></div><div class="question-list" id="liveQuestionList"></div><h3 id="liveQuestionEditorTitle">Add a question</h3><div class="field"><label for="livePrompt">Question</label><textarea id="livePrompt" rows="2" maxlength="2000" placeholder="Write a clear question"></textarea></div><div class="form-grid">${[0, 1, 2, 3].map((index) => `<div class="field"><label for="liveOption${index}">Option ${"ABCD"[index]}</label><input id="liveOption${index}" maxlength="500"></div>`).join("")}<div class="field"><label for="liveCorrect">Correct option</label><select id="liveCorrect"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></div><div class="field"><label for="liveExplanation">Explanation (optional)</label><input id="liveExplanation" maxlength="4000"></div></div><button class="button button-secondary" id="liveAddQuestion" type="button">＋ Add question</button><p class="small">Question changes are saved when you save the chapter.</p></div><div class="modal-footer"><span class="small" id="livePublishHint"></span><div class="modal-actions">${publishedExisting ? `<button class="button button-primary" id="livePublish" type="button">Save changes</button>` : `<button class="button button-outline" id="liveSaveDraft" type="button">Save draft</button><button class="button button-primary" id="livePublish" type="button">${existing ? "Save and publish" : "Publish chapter"}</button>`}</div></div>`);
+    openModal(`<div class="modal-header"><div><p class="eyebrow">CHAPTER EDITOR</p><h2 id="modalTitle">${publishedExisting ? "Edit published chapter" : existing ? "Edit draft" : "Create a chapter"}</h2></div><button class="button button-quiet" id="liveCloseChapter" type="button">Close</button></div><p class="modal-description">${publishedExisting ? "Changes apply to future practice and matches. Existing matches keep their original questions; open invitations will be cancelled." : "Add four choices and a correct answer for each question. At least 15 complete questions are required to publish."}</p><div class="form-grid"><div class="field"><label for="liveChapterTitle">Chapter title</label><input id="liveChapterTitle" maxlength="160" value="${escape(existing?.title || "")}" placeholder="For example, World War I" required></div><div class="field"><label for="liveChapterSubject">Subject</label><input id="liveChapterSubject" maxlength="100" value="${escape(existing?.subject || "")}" placeholder="History"></div></div><div class="field"><span class="field-label">Assign to classes</span><div class="live-check-list">${model.classes.filter((classroom) => !classroom.archived_at).map((classroom) => `<label><input type="checkbox" value="${escape(classroom.id)}" ${selected.has(classroom.id) || (!existing && model.classes.length === 1) ? "checked" : ""}><span>${escape(classroom.name)}</span></label>`).join("")}</div></div><div class="question-editor chapter-question-editor"><div class="live-editor-heading"><h3>Questions <span class="small" id="liveQuestionCount"></span></h3></div><div class="question-list" id="liveQuestionList"></div><h3 id="liveQuestionEditorTitle">Add a question</h3><div class="field"><label for="livePrompt">Question</label><textarea id="livePrompt" rows="2" maxlength="2000" placeholder="Write a clear question"></textarea></div><div class="form-grid">${[0, 1, 2, 3].map((index) => `<div class="field"><label for="liveOption${index}">Option ${"ABCD"[index]}</label><input id="liveOption${index}" maxlength="500"></div>`).join("")}<div class="field"><label for="liveCorrect">Correct option</label><select id="liveCorrect"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></div><div class="field"><label for="liveExplanation">Explanation (optional)</label><input id="liveExplanation" maxlength="4000"></div></div><button class="button button-secondary" id="liveAddQuestion" type="button">＋ Add question</button><p class="small">Question changes are saved when you save the chapter.</p></div><div class="modal-footer"><span class="small" id="livePublishHint"></span><div class="modal-actions">${publishedExisting ? `<button class="button button-primary" id="livePublish" type="button">Save changes</button>` : `<button class="button button-outline" id="liveSaveDraft" type="button">Save draft</button><button class="button button-primary" id="livePublish" type="button">${existing ? "Save and publish" : "Publish chapter"}</button>`}</div></div>`);
     drawQuestions();
+    const editorDraft = window.ScholaEditorDrafts.install({
+      userId, chapterId, version: existing?.updated_at,
+      getData: () => ({
+        title: document.getElementById("liveChapterTitle").value,
+        subject: document.getElementById("liveChapterSubject").value,
+        classIds: [...document.querySelectorAll(".live-check-list input:checked")].map((input) => input.value),
+        questions: questions.map((question) => questionDrafts.get(question) || question),
+        pending: ["livePrompt", "liveOption0", "liveOption1", "liveOption2", "liveOption3", "liveCorrect", "liveExplanation"].map((id) => document.getElementById(id).value),
+      }),
+      restoreData: (data) => {
+        if (typeof data.title !== "string" || typeof data.subject !== "string" || !Array.isArray(data.classIds)
+          || !Array.isArray(data.pending) || data.pending.length !== 7
+          || data.questions.some((question) => typeof question.prompt !== "string" || !Array.isArray(question.options) || question.options.length !== 4
+            || question.options.some((option) => typeof option !== "string") || ![0,1,2,3].includes(question.correct) || typeof question.explanation !== "string")) throw new Error("Invalid draft");
+        document.getElementById("liveChapterTitle").value = data.title;
+        document.getElementById("liveChapterSubject").value = data.subject;
+        document.querySelectorAll(".live-check-list input").forEach((input) => { input.checked = data.classIds.includes(input.value); });
+        questions = data.questions;
+        questionDrafts.clear();
+        ["livePrompt", "liveOption0", "liveOption1", "liveOption2", "liveOption3", "liveCorrect", "liveExplanation"].forEach((id, index) => { document.getElementById(id).value = data.pending[index]; });
+        drawQuestions();
+      },
+    });
     document.getElementById("liveCloseChapter").addEventListener("click", closeModal);
     document.getElementById("liveAddQuestion").addEventListener("click", () => {
       const prompt = document.getElementById("livePrompt").value.trim();
@@ -543,6 +615,10 @@
         : "Publish this chapter? Assigned students will be able to challenge one another on it.";
       if (publishChapter && !window.confirm(confirmation)) return;
       button.disabled = true;
+      const savingEditor = document.getElementById("liveQuestionList");
+      const controls = [...savingEditor.closest(".modal").querySelectorAll("button, input, select, textarea")].map((element) => ({ element, disabled: element.disabled }));
+      controls.forEach(({ element }) => { element.disabled = true; });
+      editorDraft.setSaving(true);
       try {
         const { error } = await client.rpc("save_chapter", {
           p_stream_id: stream.id,
@@ -554,12 +630,16 @@
           p_publish: publishChapter,
         });
         if (error) throw error;
-        closeModal();
+        if (!isCurrentUser(userId)) return;
+        if (savingEditor.isConnected) { editorDraft.saved(); closeModal(); }
         toast(publishChapter ? "Chapter saved." : "Draft saved.");
         await refresh();
       } catch (error) {
-        button.disabled = false;
-        toast(errorMessage(error, "Could not save this chapter."));
+        if (isCurrentUser(userId)) toast(errorMessage(error, "Could not save this chapter."));
+      } finally {
+        editorDraft.setSaving(false);
+        controls.forEach(({ element, disabled }) => { if (element.isConnected) element.disabled = disabled; });
+        if (button.isConnected) button.disabled = false;
       }
     };
     document.getElementById("liveSaveDraft")?.addEventListener("click", (event) => save(false, event.currentTarget));
@@ -572,7 +652,7 @@
     const active = model.matches.filter((match) => match.status === "active").length;
     const joinAction = `<button class="button button-outline" id="liveJoinClass">＋ Join a class</button>`;
     root.innerHTML = `${header("STUDENT WORKSPACE", `Welcome, ${model.profile.display_name}`, classes.length ? "Your next chapter starts here." : "Join your class to get started.", `<button class="button button-outline" id="liveRefresh">Refresh</button>`)}
-      ${classes.length ? renderRatingOverview() : ""}
+      ${classes.length ? renderRatingOverview() + renderPracticeProgress(false) : ""}
       ${classes.length ? `<div class="stats-grid">${statCard("▤", chapters.length, "Published chapters")}${statCard("⚔", active, "Active matches")}${statCard("♙", new Set(model.members.map((member) => member.user_id)).size, "Classmates")}</div>` : ""}
       ${classes.length ? `<nav class="tab-bar" aria-label="Student workspace sections"><button class="tab-button active" data-live-tab="learn">Learn</button><button class="tab-button" data-live-tab="matches">Matches ${model.challenges.filter((item) => item.status === "pending" && item.opponent_id === model.userId).length ? "· new" : ""}</button><button class="tab-button" data-live-tab="classmates">Classmates</button><button class="tab-button" data-live-tab="history">History</button></nav>
         <section class="tab-panel active" data-live-panel="learn"><div class="section-heading"><div><h2>Available chapters</h2><p>Choose a classmate to start an ranked match.</p></div><span class="small">${chapters.length} available</span></div><div class="card-grid">${chapters.map(renderStudentChapter).join("") || `<div class="empty-state"><strong>No published chapters yet</strong>Your teacher's chapters will appear here when they are assigned to this class.</div>`}</div><div class="live-inline-action">${joinAction}</div></section>
@@ -587,8 +667,19 @@
     root.querySelectorAll("[data-live-accept]").forEach((button) => button.addEventListener("click", () => acceptChallenge(button.dataset.liveAccept, button)));
     root.querySelectorAll("[data-live-cancel]").forEach((button) => button.addEventListener("click", () => cancelChallenge(button.dataset.liveCancel, button)));
     root.querySelectorAll("[data-live-match]").forEach((button) => button.addEventListener("click", () => openMatch(button.dataset.liveMatch)));
+    root.querySelectorAll("[data-review-missed]").forEach((button) => button.addEventListener("click", () => startPractice(button.dataset.reviewMissed, button, true)));
     root.querySelectorAll("[data-live-practice]").forEach((button) => button.addEventListener("click", () => startPractice(button.dataset.livePractice, button)));
     bindLiveTabs();
+  }
+
+  function renderPracticeProgress(teacher) {
+    const progress = model.practiceProgress || [];
+    if (!progress.length) return "";
+    return `<section class="learning-progress"><h2>${teacher ? "Practice progress" : "Your learning progress"}</h2><p class="small">Practice scores are separate from ELO. Accuracy is based on submitted practice answers.</p><div class="table-wrap"><table><thead><tr>${teacher ? "<th>Student</th>" : ""}<th>Topic / chapter</th><th>Rounds</th><th>Latest accuracy</th></tr></thead><tbody>${progress.map((entry) => {
+      const chapter = model.chapters.find((item) => item.id === entry.chapter_id);
+      const person = model.people.find((item) => item.id === entry.user_id);
+      return `<tr>${teacher ? `<td>${escape(person?.display_name || "Student")}</td>` : ""}<td>${escape(chapter?.subject || "General")} · ${escape(chapter?.title || "Archived chapter")}</td><td>${Number(entry.attempt_count)}</td><td>${Number(entry.latest_accuracy)}%</td></tr>`;
+    }).join("")}</tbody></table></div></section>`;
   }
 
   function renderStudentChapter(chapter) {
@@ -596,18 +687,19 @@
     const classNames = model.classes.filter((classroom) => classIds.includes(classroom.id)).map((classroom) => classroom.name);
     const count = model.questionCounts[chapter.id] || 0;
     const used = model.matches.filter((match) => match.chapter_id === chapter.id && ["active", "completed", "forfeit", "no_contest"].includes(match.status)).length;
-    return `<article class="surface-card set-card"><div class="set-card-top"><span class="subject-tag">${escape(chapter.subject || "General")}</span><span class="state-tag">${Math.max(0, 3 - used)} matches left</span></div><span class="set-icon" aria-hidden="true">✳</span><h3>${escape(chapter.title)}</h3><p class="set-meta">${count} questions${classNames.length ? ` · ${escape(classNames.join(" · "))}` : ""}</p><div class="set-card-footer"><div class="live-chapter-actions"><button class="button button-outline" data-live-practice="${escape(chapter.id)}">Practice</button><button class="button button-primary" data-live-challenge="${escape(chapter.id)}" ${used >= 3 ? "disabled" : ""}>Challenge →</button></div></div></article>`;
+    return `<article class="surface-card set-card"><div class="set-card-top"><span class="subject-tag">${escape(chapter.subject || "General")}</span><span class="state-tag">${Math.max(0, 3 - used)} matches left</span></div><span class="set-icon" aria-hidden="true">✳</span><h3>${escape(chapter.title)}</h3><p class="set-meta">${count} questions${classNames.length ? ` · ${escape(classNames.join(" · "))}` : ""}</p><div class="set-card-footer"><div class="live-chapter-actions"><button class="button button-outline" data-live-practice="${escape(chapter.id)}">Practice</button>${model.practiceProgress?.some((entry) => entry.chapter_id === chapter.id) ? `<button class="button button-quiet" data-review-missed="${escape(chapter.id)}">Review mistakes</button>` : ""}<button class="button button-primary" data-live-challenge="${escape(chapter.id)}" ${used >= 3 ? "disabled" : ""}>Challenge →</button></div></div></article>`;
   }
 
-  async function startPractice(chapterId, button) {
+  async function startPractice(chapterId, button, missedOnly = false) {
     const userId = model.userId;
     button.disabled = true;
     try {
       const chapter = model.chapters.find((item) => item.id === chapterId);
-      const practiceRows = await rows(client.rpc('get_practice_questions', { p_chapter_id: chapterId }));
+      const practiceRows = await rows(client.rpc(missedOnly ? 'get_missed_practice_questions' : 'get_practice_questions', { p_chapter_id: chapterId }));
       if (!isCurrentUser(userId)) return;
-      if (!practiceRows.length) return toast('This chapter has no questions to practise yet.');
+      if (!practiceRows.length) return toast(missedOnly ? 'No missed questions to review. Try a full practice round first.' : 'This chapter has no questions to practise yet.');
       if (typeof window.scholaOpenQuiz !== 'function') throw new Error('The practice interface could not be loaded. Reload the page and try again.');
+      const attemptId = crypto.randomUUID();
       const questions = practiceRows.map((question) => {
         const originalOptions = question.options;
         const order = [0, 1, 2, 3];
@@ -616,6 +708,8 @@
           [order[index], order[swapIndex]] = [order[swapIndex], order[index]];
         }
         return {
+          id: question.id,
+          originalOrder: order,
           text: question.prompt,
           options: order.map((optionIndex) => originalOptions[optionIndex]),
           correct: order.indexOf(Number(question.correct_option_index)),
@@ -627,14 +721,23 @@
         questions,
         initialAnswers: Array(questions.length).fill(null),
         isPractice: true,
-        onFinish: (answers) => {
+        onFinish: async (answers) => {
+          if (!isCurrentUser(userId)) return;
+          const { error } = await client.rpc("submit_practice", {
+            p_chapter_id: chapterId, p_attempt_id: attemptId,
+            p_answers: answers.map((answer, index) => ({ question_id: questions[index].id, answer: questions[index].originalOrder[answer] })),
+          });
+          if (error) throw error;
+          if (!isCurrentUser(userId)) return;
           const correct = answers.reduce((total, answer, index) => total + (answer === questions[index].correct ? 1 : 0), 0);
           const review = questions.map((question, index) => {
             const isCorrect = answers[index] === question.correct;
             return `<div class='answer-review'><strong class='${isCorrect ? 'is-correct' : 'is-incorrect'}'>${isCorrect ? 'Correct' : 'Review'} · ${index + 1}. ${escape(question.text)}</strong><span>Answer: ${'ABCD'[question.correct]} · ${escape(question.options[question.correct])}${question.explanation ? ` · ${escape(question.explanation)}` : ''}</span></div>`;
           }).join('');
-          openModal(`<div class='modal-header'><div><p class='eyebrow'>PRACTICE COMPLETE</p><h2 id='modalTitle'>Full chapter reviewed</h2></div><button class='button button-quiet' id='closePracticeResult' type='button'>Close</button></div><div class='result-score'>${correct}<span> / ${questions.length} correct</span></div><p class='modal-description'>Practice does not change ranked results or ratings.</p><div class='question-list'>${review}</div>`);
+          openModal(`<div class='modal-header'><div><p class='eyebrow'>PRACTICE COMPLETE</p><h2 id='modalTitle'>Full chapter reviewed</h2></div><button class='button button-quiet' id='closePracticeResult' type='button'>Close</button></div><div class='result-score'>${correct}<span> / ${questions.length} correct</span></div><p class='modal-description'>Practice does not change ranked results or ratings.</p><div class='question-list'>${review}</div>${correct < questions.length ? `<button type="button" class="button button-secondary" id="reviewPracticeMistakes">Review missed questions (${questions.length - correct})</button>` : `<p class="small">All answers correct.</p>`}`);
           document.getElementById('closePracticeResult').addEventListener('click', closeModal);
+          document.getElementById('reviewPracticeMistakes')?.addEventListener('click', (event) => startPractice(chapterId, event.currentTarget, true));
+          await refresh();
         },
       });
     } catch (error) {
@@ -894,12 +997,34 @@
       const correct = selectedIndex === key.correct_option_index;
       return `<div class="answer-review"><strong class="${correct ? "is-correct" : "is-incorrect"}">${correct ? "Correct" : "Review"} · ${escape(question.prompt)}</strong><span>Answer: ${escape(correctOption)}${key.explanation ? ` · ${escape(key.explanation)}` : ""}</span></div>`;
     }).join("");
-    openModal(`<div class="modal-header"><div><p class="eyebrow">MATCH COMPLETE</p><h2 id="modalTitle">${outcome}</h2></div><button class="button button-quiet" id="closeMatchResult" type="button">Close</button></div><div class="result-summary"><div class="result-stat"><strong>${score} / ${questions.length}</strong><span>Your correct answers</span></div><div class="result-stat"><strong>${opponentScore === null ? "—" : `${opponentScore} / ${questions.length}`}</strong><span>${escape(opponent?.display_name || "Opponent")} · correct answers</span></div></div>${ratingChange !== undefined ? `<div class="rating-summary"><strong>${Number(ratingChange) >= 0 ? "+" : ""}${Number(ratingChange)} ELO</strong><span>Rating updated</span></div>` : ""}<div class="question-list">${review}</div>`);
+    const missed = questions.filter((question, index) => keyMap[question.id] && orderMap[question.id]?.[answers[index]] !== keyMap[question.id].correct_option_index)
+      .map((question) => ({ text: question.prompt, options: question.options, correct: keyMap[question.id].correct_option_index, explanation: keyMap[question.id].explanation }));
+    openModal(`<div class="modal-header"><div><p class="eyebrow">MATCH COMPLETE</p><h2 id="modalTitle">${outcome}</h2></div><button class="button button-quiet" id="closeMatchResult" type="button">Close</button></div><div class="result-summary"><div class="result-stat"><strong>${score} / ${questions.length}</strong><span>Your correct answers</span></div><div class="result-stat"><strong>${opponentScore === null ? "—" : `${opponentScore} / ${questions.length}`}</strong><span>${escape(opponent?.display_name || "Opponent")} · correct answers</span></div></div>${ratingChange !== undefined ? `<div class="rating-summary"><strong>${Number(ratingChange) >= 0 ? "+" : ""}${Number(ratingChange)} ELO</strong><span>Rating updated</span></div>` : ""}<div class="question-list">${review}</div>${missed.length ? `<button class="button button-secondary" type="button" id="reviewMatchMistakes">Review missed questions (${missed.length})</button>` : ""}`);
     document.getElementById("closeMatchResult").addEventListener("click", closeModal);
+    document.getElementById("reviewMatchMistakes")?.addEventListener("click", () => reviewMatchQuestions(missed));
+  }
+
+  function reviewMatchQuestions(sourceQuestions) {
+    const questions = sourceQuestions.map((question) => {
+      const order = [0,1,2,3];
+      for (let index = 3; index > 0; index -= 1) {
+        const other = Math.floor(Math.random() * (index + 1));
+        [order[index], order[other]] = [order[other], order[index]];
+      }
+      return { ...question, options: order.map((option) => question.options[option]), correct: order.indexOf(question.correct) };
+    });
+    window.scholaOpenQuiz({ title: "Review missed questions", questions, isPractice: true,
+      initialAnswers: questions.map(() => null), onFinish(answers) {
+        const missed = questions.filter((question,index) => answers[index] !== question.correct);
+        openModal(`<div class="modal-header"><h2 id="modalTitle">Review complete</h2><button class="button button-quiet" id="closeMistakeReview">Close</button></div><div class="result-score">${questions.length - missed.length} / ${questions.length}</div><p class="small">This review uses the questions from your completed match and does not change ELO or your chapter practice history.</p><div class="question-list">${questions.map((question,index) => `<div class="answer-review"><strong>${answers[index] === question.correct ? "Correct" : "Review"} · ${escape(question.text)}</strong><span>${escape(question.options[question.correct])}${question.explanation ? ` · ${escape(question.explanation)}` : ""}</span></div>`).join("")}</div>${missed.length ? '<button class="button button-secondary" type="button" id="repeatMistakeReview">Try missed questions again</button>' : ""}`);
+        document.getElementById("closeMistakeReview").addEventListener("click", closeModal);
+        document.getElementById("repeatMistakeReview")?.addEventListener("click", () => reviewMatchQuestions(missed));
+      } });
   }
 
   function reset() {
     if (model.userId) {
+      window.ScholaEditorDrafts?.clearUser(model.userId);
       try {
         Object.keys(localStorage).filter((key) => key.startsWith(`${draftPrefix}${model.userId}:`))
           .forEach((key) => localStorage.removeItem(key));

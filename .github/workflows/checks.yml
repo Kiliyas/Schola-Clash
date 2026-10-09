@@ -1,0 +1,38 @@
+name: Checks
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.11
+        env:
+          POSTGRES_PASSWORD: schola-ci-disposable
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.25.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:database
+      - run: pnpm test:bootstrap && pnpm test:integration
+        env:
+          SCHOLA_TEST_DATABASE_URL: postgresql://postgres:schola-ci-disposable@127.0.0.1:5432/postgres
+      - run: python3 tests/backup.test.py
+      - run: pnpm test:profiles && pnpm test:account && pnpm test:workflow && pnpm test:reliability
+        env:
+          SCHOLA_TEST_OFFLINE: '1'
+          SCHOLA_BROWSER_CHANNEL: chromium

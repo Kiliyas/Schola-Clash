@@ -12,6 +12,7 @@ let accountIssue = null;
 let accountReady = false;
 let accountMode = "signin";
 let authRequestVersion = 0;
+let confirmationRequestedAt = 0;
 const authLinkParams = new URLSearchParams(location.hash.slice(1));
 let recoveringPassword = authLinkParams.get("type") === "recovery";
 if (authLinkParams.has("error")) {
@@ -34,6 +35,7 @@ function escapeHtml(value) {
 }
 
 function userErrorMessage(error, fallback = "Something went wrong. Please try again.") {
+  window.scholaReportError?.("account", error);
   const messages = {
     invalid_credentials: "The email or password is incorrect.",
     email_not_confirmed: "Confirm your email before signing in.",
@@ -63,23 +65,41 @@ function statCard(icon, value, label) {
 }
 
 let quizCleanup = null;
+let modalLifecycle = null;
+let modalReturnFocus = null;
+
+window.addEventListener("beforeunload", (event) => {
+  modalLifecycle?.flush?.();
+  if (modalLifecycle?.dirty?.()) { event.preventDefault(); event.returnValue = ""; }
+});
 
 function openModal(html) {
-  if (!accountSession || !accountProfile) return;
+  if (!accountSession || !accountProfile) return false;
+  if (modalLifecycle && !closeModal()) return false;
+  if (!modalBackdrop.classList.contains("show")) modalReturnFocus = document.activeElement;
   quizCleanup?.();
   quizCleanup = null;
   modal.innerHTML = html;
   modalBackdrop.classList.add("show");
   modalBackdrop.setAttribute("aria-hidden", "false");
   modal.querySelector("button, input, select")?.focus();
+  return true;
 }
 
-function closeModal() {
+function closeModal(force = false) {
+  if (force !== true && modalLifecycle?.busy?.()) { showToast("Saving the chapter. Please wait."); return false; }
+  modalLifecycle?.flush?.();
+  if (force !== true && modalLifecycle?.dirty?.() && !window.confirm(modalLifecycle.closeMessage?.() || "Close the chapter editor? Your unsaved draft is kept on this device. You can restore it when you reopen the chapter.")) return false;
+  modalLifecycle?.cleanup?.();
+  modalLifecycle = null;
   quizCleanup?.();
   quizCleanup = null;
   modalBackdrop.classList.remove("show");
   modalBackdrop.setAttribute("aria-hidden", "true");
   modal.innerHTML = "";
+  if (modalReturnFocus?.isConnected) modalReturnFocus.focus();
+  modalReturnFocus = null;
+  return true;
 }
 
 function formatTimeRemaining(deadlineAt) {
@@ -144,10 +164,11 @@ async function refreshAccount(session = undefined) {
     }
     if (version !== authRequestVersion) return;
     if (accountSession?.user?.id !== nextSession?.user?.id) {
-      closeModal();
+      closeModal(true);
       window.ScholaLiveApp?.reset();
     }
     accountSession = nextSession;
+    window.scholaSetDiagnosticUser?.(nextSession?.user?.id || null);
     accountProfile = null;
     accountIssue = authLinkParams.has("error") && !nextSession ? "This sign-in link is invalid or expired. Request a new password reset link." : null;
     if (nextSession?.user) {
@@ -176,12 +197,29 @@ function renderAccountForm() {
     <button class="button button-primary account-submit" type="submit">${resetting ? "Send reset link" : signingUp ? "Create account" : "Sign in"}</button>
     ${!signingUp && !resetting ? '<button class="account-switch" type="button" id="forgotPassword">Forgot password?</button>' : ""}
     <button class="account-switch" type="button" id="toggleAuthMode">${resetting || signingUp ? "Already have an account? Sign in" : "New here? Create an account"}</button>
+    ${!resetting ? '<button class="account-switch" type="button" id="resendConfirmation">Resend confirmation email</button>' : ""}
   </form></section>`;
   document.getElementById("forgotPassword")?.addEventListener("click", () => {
     const email = document.getElementById("authEmail").value;
     accountMode = "reset"; accountIssue = null; renderAccountForm();
     document.getElementById("authEmail").value = email;
     document.getElementById("authEmail").focus();
+  });
+  document.getElementById("resendConfirmation")?.addEventListener("click", async (event) => {
+    const email = document.getElementById("authEmail");
+    const message = document.getElementById("authMessage");
+    if (!email.reportValidity()) return;
+    if (Date.now() - confirmationRequestedAt < 60000) { message.textContent = "Wait a minute before requesting another confirmation email."; return; }
+    const button = event.currentTarget;
+    button.disabled = true;
+    message.textContent = "Sending confirmation email...";
+    try {
+      const { error } = await supabaseClient.auth.resend({ type: "signup", email: email.value.trim(), options: { emailRedirectTo: location.origin + location.pathname } });
+      if (error) throw error;
+      confirmationRequestedAt = Date.now();
+      message.textContent = "If this account needs confirmation, a new link is on its way. Check your inbox and spam folder.";
+    } catch (error) { message.textContent = userErrorMessage(error, "Could not send the confirmation email. Please try again."); }
+    finally { button.disabled = false; }
   });
   document.getElementById("toggleAuthMode").addEventListener("click", () => {
     accountMode = signingUp || resetting ? "signin" : "signup";
@@ -252,8 +290,10 @@ function renderPasswordForm() {
 function openAccountEditor() {
   const userId = accountSession?.user.id;
   if (!userId || !accountProfile) return;
+  if (modalLifecycle && !closeModal()) return;
   openModal(`<div class="modal-header"><h2 id="modalTitle">My account</h2><button class="button button-quiet" id="closeAccount" type="button">Close</button></div><form id="accountForm"><div class="field"><label for="displayName">Your name</label><input id="displayName" name="displayName" value="${escapeHtml(accountProfile.display_name)}" autocomplete="name" maxlength="80" required></div><p class="small">${escapeHtml(accountSession.user.email || "")} · ${escapeHtml(accountProfile.role)}</p><p id="accountMessage" role="status" aria-live="polite"></p><div class="modal-footer"><button class="button button-primary" type="submit">Save name</button></div></form>`);
   document.getElementById("closeAccount").addEventListener("click", closeModal);
+  window.ScholaAccountActions?.mount({ client: supabaseClient, session: accountSession, profile: accountProfile, host: modal });
   document.getElementById("accountForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget, message = document.getElementById("accountMessage"), name = form.elements.displayName.value.trim();
@@ -264,7 +304,9 @@ function openAccountEditor() {
       const { data, error } = await supabaseClient.from("user_profiles").update({ display_name: name }).eq("id", userId).select("display_name, role").single();
       if (error) throw error;
       if (accountSession?.user.id !== userId) return;
-      accountProfile = data; closeModal(); render(); showToast("Name updated.");
+      accountProfile = data;
+      if (form.isConnected) closeModal();
+      render(); showToast("Name updated.");
     } catch (error) { message.textContent = userErrorMessage(error, "Could not save your name. Please try again."); }
     finally { button.disabled = false; form.removeAttribute("aria-busy"); }
   });
@@ -293,6 +335,16 @@ modalBackdrop.addEventListener("click", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && modalBackdrop.classList.contains("show")) closeModal();
+  if (event.key === "Tab" && modalBackdrop.classList.contains("show")) {
+    const focusable = [...modal.querySelectorAll('button, input, select, textarea, a[href], summary, [tabindex]')]
+      .filter((element) => !element.disabled && element.tabIndex >= 0 && element.getClientRects().length);
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (!first) { event.preventDefault(); modal.focus(); return; }
+    if (!modal.contains(document.activeElement) || (event.shiftKey && document.activeElement === first)
+      || (!event.shiftKey && document.activeElement === last)) {
+      event.preventDefault(); (event.shiftKey ? last : first).focus();
+    }
+  }
 });
 
 function openQuiz({ title, questions, initialAnswers, isPractice, deadlineAt = null, remainingMs = null, onChange, onExpire, onFinish }) {
@@ -351,7 +403,7 @@ function openQuiz({ title, questions, initialAnswers, isPractice, deadlineAt = n
     });
     tick();
   };
-  openModal("");
+  if (!openModal("")) return;
   paint();
   if (timed) {
     const timer = window.setInterval(tick, 1000);
@@ -363,6 +415,7 @@ function openQuiz({ title, questions, initialAnswers, isPractice, deadlineAt = n
 window.scholaShowToast = showToast;
 window.scholaOpenModal = openModal;
 window.scholaCloseModal = closeModal;
+window.scholaSetModalLifecycle = (lifecycle) => { modalLifecycle = lifecycle; };
 window.scholaOpenQuiz = openQuiz;
 window.scholaUserErrorMessage = userErrorMessage;
 window.scholaRefreshAccount = refreshAccount;

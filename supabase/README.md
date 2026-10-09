@@ -1,6 +1,6 @@
 # Supabase backend foundation
 
-`backend.sql` contains the initial schema. The tracked deployment history is in `migrations/`; it contains the initial schema, foreign-key indexes and policies, class invitation codes, and atomic teacher-space/chapter RPCs. These migrations are applied to the connected development project **Schola clash** (`bqhzqsyfzbwprhummugp`).
+`backend.sql` contains the initial schema. The tracked deployment history is in `migrations/`; it contains the initial schema, foreign-key indexes and policies, class invitation codes, and atomic teacher-space/chapter RPCs. The earlier migrations are applied to the connected development project **Schola clash** (`bqhzqsyfzbwprhummugp`); the reliability migration described below is pending.
 
 ## What it covers
 
@@ -46,3 +46,9 @@ Do not grant authenticated users permission to change their own `role`.
 Supabase is connected to this Codex session, and the static app loads a browser client configured with the project's URL and publishable key. Email/password sign-in, student sign-up, profile reads, and the live classroom flow are wired in the client. At least one user profile exists in the project. The Supabase CLI is not installed here, so migration files use the exact versions returned by the connected project. Check the Supabase security advisor before a school pilot; leaked-password protection may need to be enabled in Auth settings.
 
 Do not reapply these migrations manually. Use new versioned migrations for later schema changes.
+
+## Pending reliability migration
+
+`20261009070651_account_learning_reliability.sql` adds archive timestamps, teacher material lifecycle RPCs, server-scored/idempotent practice attempts and progress, account requests, private diagnostics and an administrator-only retention function. It fixes match-limit checks to count each player's accepted matches separately and rechecks membership/publication on acceptance. It is **not deployed**. See [operations/DEPLOYMENT.md](../operations/DEPLOYMENT.md) before applying it or publishing the updated frontend.
+
+The new private functions follow the existing checked definer/public invoker pattern. Data API tables have RLS and read policies; direct client writes to practice history and requests are not granted. A teacher-access request cannot change the profile role. Diagnostics accept only known contexts and bounded codes, and clients cannot read them. Private operational tables deliberately deny all direct client access.

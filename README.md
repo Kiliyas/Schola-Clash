@@ -26,6 +26,10 @@ See [supabase/README.md](supabase/README.md) for database setup, access rules, a
 
 - Teacher and student dashboards with responsive layouts.
 - Chapter creation, draft saving, editing, and publishing with at least 15 questions.
+- Inline question editing, local draft autosave and restoration, and unsaved-change warnings.
+- Chapter/class archiving and restoration, chapter copying/unpublishing, and class renaming.
+- Server-scored practice progress and practice of missed questions, separate from ELO.
+- Teacher-access and deletion requests with status and cancellation, plus confirmation-email resend.
 - Student profiles for teachers, including ELO, class membership, chapter progress, and recent matches.
 - Prominent student ELO, with separate ratings for each teacher's teaching space.
 - Full-chapter practice with shuffled choices and answer review, without rating changes.
@@ -58,7 +62,7 @@ The workflow suite uses a shared, stateful transport fixture with separate teach
 
 These browser suites validate workflows, not deployed Postgres scoring, RLS, or concurrency guarantees. They never send test writes to the connected Supabase project. The workflow suite also exercises countdown expiry and a device clock set years ahead; the quiz anchors its remaining time to the server response and a monotonic browser clock.
 
-`tests/timed-matches.sql` is an administrator-only database integration check. It creates synthetic users without credentials and a classroom inside a transaction, exercises the real RPCs, and rolls everything back. It verifies duration, unchanged deadlines after reopening/repeated acceptance, server-time responses, rejection of late answers, forfeit/no-contest behavior, on-time scoring/ELO, and no duplicate rating application. Run the entire file, including `rollback`, in a trusted SQL session after all migrations. Concurrent requests and cross-class RLS checks still need separate integration coverage.
+`tests/timed-matches.sql` is an administrator-only database integration check. It creates synthetic users without credentials and a classroom inside a transaction, exercises the real RPCs, and rolls everything back. It verifies duration, unchanged deadlines after reopening/repeated acceptance, server-time responses, rejection of late answers, forfeit/no-contest behavior, on-time scoring/ELO, and no duplicate rating application. Run the entire file, including `rollback`, in a trusted SQL session after all migrations. Separate reliability and concurrent-session suites cover cross-class RLS and simultaneous requests.
 
 ## Account management
 
@@ -76,3 +80,23 @@ node tests/workflow.browser.cjs
 ```
 
 The offline option serves workspace files directly to Chrome without a local HTTP server.
+
+## Reliability release — deployment pending
+
+The new account/material/practice operations require `supabase/migrations/20261009070651_account_learning_reliability.sql`. It is locally validated but **not applied to the live project**. Deploy the database migration before the updated frontend. See [deployment and rollback instructions](operations/DEPLOYMENT.md) for the exact release, backup, SMTP and test-project requirements.
+
+Development dependencies are pinned in `package.json` and `pnpm-lock.yaml`. After `pnpm install --frozen-lockfile`, run:
+
+```powershell
+$env:SCHOLA_TEST_OFFLINE = "1"
+pnpm test:database
+pnpm test:profiles
+pnpm test:account
+pnpm test:workflow
+pnpm test:reliability
+python tests/backup.test.py
+```
+
+`test:database` uses an isolated PostgreSQL engine and verifies transactional behavior and a restored snapshot. `test:integration` requires a private `SCHOLA_TEST_DATABASE_URL` for a disposable PostgreSQL/Supabase test database; it checks real simultaneous sessions and cleans up synthetic data. It refuses the live project's connection. This suite passed locally on native PostgreSQL 17.10, including simultaneous acceptance, submission and the three-match boundary. CI prepares an empty PostgreSQL service with `test:bootstrap`. Hosted Supabase integration is still required before deployment; browser fixtures and the single-backend engine alone do not establish concurrency guarantees.
+
+Daily encrypted backups and retention are prepared in `.github/workflows/operations.yml`, disabled until the required private secrets and repository variable are configured. Real production backup/restore and email delivery remain unverified. The supplied email had no registered test account; successful mail API responses did not establish delivery.

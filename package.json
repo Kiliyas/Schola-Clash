@@ -1,0 +1,19 @@
+{
+  "name": "schola-clash",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "test:database": "node tests/database.local.cjs",
+    "test:bootstrap": "node tests/database.bootstrap.cjs",
+    "test:integration": "node tests/database.integration.cjs",
+    "test:profiles": "node tests/profiles.browser.cjs",
+    "test:account": "node tests/account.browser.cjs",
+    "test:workflow": "node tests/workflow.browser.cjs",
+    "test:reliability": "node tests/reliability.browser.cjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.3.14",
+    "pg": "8.16.3",
+    "playwright": "1.62.1"
+  }
+}

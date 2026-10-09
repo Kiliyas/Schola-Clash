@@ -10,6 +10,9 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js" defer></script>
   <script src="supabase/client-config.js" defer></script>
   <script src="supabase/client.js" defer></script>
+  <script src="supabase/editor-drafts.js" defer></script>
+  <script src="supabase/account-actions.js" defer></script>
+  <script src="supabase/diagnostics.js" defer></script>
   <script src="supabase/live-app.js" defer></script>
   <script src="app.js" defer></script>
 </head>
@@ -30,11 +33,12 @@
     <footer class="app-footer">
       <span>Schola Clash</span>
       <span>Progress first. Competition second.</span>
+      <a href="privacy.html">Privacy and data</a>
     </footer>
   </div>
 
   <div class="modal-backdrop" id="modalBackdrop" aria-hidden="true">
-    <section class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle"></section>
+    <section class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" tabindex="-1"></section>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 </body>

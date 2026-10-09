@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.*
+!.env.example
+backups/
+test-results/
+*.age
+*.dump
+*.key
+supabase/.temp/
+__pycache__/

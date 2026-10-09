@@ -1,0 +1,27 @@
+name: Encrypted backup and retention
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 1 * * *'
+jobs:
+  backup:
+    if: vars.SCHOLA_OPERATIONS_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: postgres:17.11
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update && apt-get install -y --no-install-recommends age python3
+      - run: python3 operations/backup.py backup --directory backups
+        env:
+          SCHOLA_DATABASE_URL: ${{ secrets.SCHOLA_DATABASE_URL }}
+          SCHOLA_BACKUP_RECIPIENT: ${{ secrets.SCHOLA_BACKUP_RECIPIENT }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-schola-backup-${{ github.run_id }}
+          path: backups/*
+          retention-days: 7
+      - name: Retention maintenance
+        run: psql --no-psqlrc --set=ON_ERROR_STOP=1 --command 'select private.purge_operational_data();'
+        env:
+          PGDATABASE: ${{ secrets.SCHOLA_DATABASE_URL }}

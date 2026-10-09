@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const {chromium}=require('playwright');
 const {liveFixtures,installSupabaseStub,assertLayout}=require('./profiles.browser.cjs');
 (async()=>{
- const browser=await chromium.launch({headless:true,channel:'chrome'});
+ const browser=await chromium.launch({headless:true,channel:process.env.SCHOLA_BROWSER_CHANNEL || 'chrome'});
  try {
  for(const width of [1440,390,320]) {
  const context=await browser.newContext({viewport:{width,height:900}});
@@ -24,7 +24,7 @@ const {liveFixtures,installSupabaseStub,assertLayout}=require('./profiles.browse
  client.from=(table)=>{
  const q=from(table);
  if(table==='user_profiles') q.update=(values)=>{
- const updateQuery={eq(key,id){window.__accountCalls.push({values,key,id});return updateQuery;},select(){return updateQuery;},async single(){if(failName){failName=false;return {error:{status:500}};}return {data:{display_name:values.display_name,role:'student'},error:null};}};
+ const updateQuery={eq(key,id){window.__accountCalls.push({values,key,id});return updateQuery;},select(){return updateQuery;},async single(){if(failName){failName=false;return {error:{status:500}};}if(window.__pauseNameSave)await new Promise(resolve=>{window.__resumeNameSave=resolve;});return {data:{display_name:values.display_name,role:'student'},error:null};}};
  return updateQuery;
  };
  return q;};return client;
@@ -48,6 +48,13 @@ const {liveFixtures,installSupabaseStub,assertLayout}=require('./profiles.browse
  await page.locator('#displayName').fill('  Updated Student  ');await page.locator('#accountForm [type=submit]').click();await page.getByText('Could not save your name. Please try again.',{exact:true}).waitFor();
  await page.locator('#accountForm [type=submit]').click();await page.getByRole('heading',{name:'Welcome, Updated Student'}).waitFor();
  await page.locator('#accountButton').click();assert.equal(await page.locator('#displayName').inputValue(),'Updated Student');await assertLayout(page,'account-'+width,true);
+ await page.evaluate(()=>{window.__pauseNameSave=true;});
+ await page.locator('#displayName').fill('Later Student');await page.locator('#accountForm [type=submit]').click();
+ await page.waitForFunction(()=>typeof window.__resumeNameSave==='function');
+ await page.locator('#closeAccount').click();await page.locator('#accountButton').click();
+ await page.evaluate(()=>{window.__pauseNameSave=false;window.__resumeNameSave();});
+ await page.getByRole('heading',{name:'Welcome, Later Student'}).waitFor();
+ assert.equal(await page.locator('#accountForm').count(),1,'A late name save must not close a newly opened modal');
  await page.getByRole('button',{name:'Close',exact:true}).click();await assertLayout(page,'account-'+width);
  assert.deepEqual(errors,[]);console.log('PASS account '+width);await context.close();
  }

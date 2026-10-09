@@ -459,3 +459,14 @@ tbody tr:hover { background: #f7fafc; }
 .chapter-question > summary:focus-visible { outline: 2px solid #315d46; outline-offset: 2px; }
 /* Keep class checkboxes compact inside the chapter's full-width field. */
 .field .live-check-list input[type="checkbox"] { width: 18px; height: 18px; min-width: 18px; flex: 0 0 18px; padding: 0; }
+.chapter-draft-banner { padding: 14px; margin-bottom: 16px; border: 1px solid var(--line); border-radius: 8px; background: #f4f8f2; }
+.chapter-draft-banner .button { margin: 8px 8px 0 0; }
+.workspace-archive { margin-top: 20px; }
+.workspace-archive > summary, .material-menu > summary, .account-actions summary { cursor: pointer; padding: 10px 0; }
+.material-menu { width: 100%; border-top: 1px solid var(--line); }
+.material-menu > div { display: flex; gap: 8px; flex-wrap: wrap; }
+.set-card-footer:has(.material-menu) { flex-wrap: wrap; }
+.learning-progress { margin: 24px 0; padding: 20px; border: 1px solid var(--line); border-radius: 8px; background: white; }
+.account-actions { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 18px; }
+.account-actions form { margin: 12px 0; }
+.account-actions form[data-request-kind="deletion"] > label { display: block; margin-bottom: 12px; }

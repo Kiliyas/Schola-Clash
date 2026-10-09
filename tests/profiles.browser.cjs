@@ -132,12 +132,20 @@ function installSupabaseStub(fixtures) {
       if (window.__workflowRPC) return window.__workflowRPC(name, args).finally(() => { window.__workflowSettled = name; });
       if (fixtures.role === "server-error") return Promise.resolve({ data: null, error: { code: "PGRST202", message: "Could not find the function public.get_teacher_chapter_progress in Supabase schema cache" } });
       if (name === "get_practice_questions") return Promise.resolve({ data: [
-        { prompt: "First practice question", options: ["First", "Second", "Third", "Fourth"], correct_option_index: 0, explanation: "Practice explanation" },
-        { prompt: "Second practice question", options: ["One", "Two", "Three", "Four"], correct_option_index: 1, explanation: "Second explanation" },
+        { id: "practice-question-1", prompt: "First practice question", options: ["First", "Second", "Third", "Fourth"], correct_option_index: 0, explanation: "Practice explanation" },
+        { id: "practice-question-2", prompt: "Second practice question", options: ["One", "Two", "Three", "Four"], correct_option_index: 1, explanation: "Second explanation" },
       ], error: null });
       if (name === "get_teacher_chapter_progress") return Promise.resolve({ data: fixtures.progress.filter((entry) => entry.stream_id === args.p_stream_id), error: null });
       return blockedWrite(`rpc.${name}`);
     },
+  };
+  fixtures.tables.account_requests ||= [];
+  const originalRPC = client.rpc;
+  client.rpc = (name, args) => {
+    if (name === "get_learning_progress") return Promise.resolve({ data: [], error: null });
+    if (name === "report_client_error") return Promise.resolve({ data: null, error: null });
+    if (name === "submit_practice") return Promise.resolve({ data: { correct_count: 1, question_count: args.p_answers.length }, error: null });
+    return originalRPC(name, args);
   };
   window.supabase = { createClient: () => client };
 }
