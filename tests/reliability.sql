@@ -6,7 +6,7 @@ grant select on reliability_ids to authenticated, anon;
 do $$
 declare
   t reliability_ids%rowtype; v_questions jsonb; v_answers jsonb; v_copy uuid; v_foreign_stream uuid;
-  v_foreign_class uuid; v_challenge uuid; v_match uuid; v_result jsonb; v_rejected boolean; v_n integer;
+  v_foreign_class uuid; v_challenge uuid; v_match uuid; v_result jsonb; v_rejected boolean; v_n integer; v_version timestamptz;
 begin
   select * into t from reliability_ids;
   insert into auth.users(id,raw_user_meta_data,raw_app_meta_data)
@@ -19,6 +19,14 @@ begin
   select jsonb_agg(jsonb_build_object('prompt','Question '||n,'options',jsonb_build_array('A','B','C','D'),'correct_option_index',0,'explanation','Explanation') order by n) into v_questions from generate_series(1,15) n;
   t.chapter := public.save_chapter(t.stream,null,'Reliability chapter','Science',array[t.class],v_questions,true);
   update reliability_ids set stream=t.stream, class=t.class, chapter=t.chapter;
+  select updated_at into v_version from public.chapters where id=t.chapter;
+  perform public.save_chapter_versioned(t.stream,t.chapter,'Versioned chapter','Science',array[t.class],v_questions,true,v_version);
+  v_rejected:=false;
+  begin
+    perform public.save_chapter_versioned(t.stream,t.chapter,'Stale overwritten chapter','Science',array[t.class],v_questions,true,v_version);
+  exception when sqlstate 'SC001' then v_rejected:=true;
+  end;
+  if not v_rejected or (select title from public.chapters where id=t.chapter)<>'Versioned chapter' then raise exception 'Stale editor overwrote a newer chapter.'; end if;
   v_copy := public.manage_chapter(t.chapter,'copy');
   if (select published_at from public.chapters where id=v_copy) is not null or (select count(*) from public.chapter_questions where chapter_id=v_copy)<>15 then raise exception 'Copy must be a complete draft.'; end if;
   perform public.manage_chapter(t.chapter,'unpublish');
@@ -48,6 +56,12 @@ begin
   perform public.submit_practice(t.chapter,v_answers,t.attempt);
   if v_result->>'correct_count'<>'14' or (select count(*) from public.practice_attempts where id=t.attempt)<>1 then raise exception 'Practice scoring/idempotency failed.'; end if;
   if jsonb_array_length(public.get_missed_practice_questions(t.chapter))<>1 then raise exception 'Missed-question review is wrong.'; end if;
+  select jsonb_agg(jsonb_build_object('question_id',id,'answer',0)) into v_answers from public.chapter_questions where chapter_id=t.chapter and position=1;
+  perform public.submit_practice_round(t.chapter,v_answers,gen_random_uuid(),true);
+  if (select latest_accuracy from public.get_learning_progress_by_mode() where chapter_id=t.chapter and not is_review)<>93
+    or (select latest_accuracy from public.get_learning_progress_by_mode() where chapter_id=t.chapter and is_review)<>100 then
+    raise exception 'Mistake review overwrote full practice accuracy.';
+  end if;
   perform public.request_account_action('teacher_access','Test school');
   perform public.request_account_action('teacher_access','Updated school');
   if (select count(*) from public.account_requests where user_id=t.one and status='pending')<>1 then raise exception 'Duplicate access requests.'; end if;
@@ -100,7 +114,7 @@ do $$
 declare t reliability_ids%rowtype;
 begin
   select * into t from reliability_ids;
-  if not exists(select 1 from public.get_learning_progress(t.stream) where user_id=t.one and latest_accuracy=93) then raise exception 'Teacher practice progress missing.'; end if;
+  if not exists(select 1 from public.get_learning_progress_by_mode(t.stream) where user_id=t.one and not is_review and latest_accuracy=93) then raise exception 'Teacher practice progress missing.'; end if;
 end;
 $$;
 reset role;

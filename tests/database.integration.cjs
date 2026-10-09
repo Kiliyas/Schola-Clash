@@ -52,6 +52,17 @@ async function main() {
     const count = await admin.query("select count(*)::int as count from public.matches where chapter_id=$1 and $2 in (player_one_id,player_two_id)", [ids.chapter, ids.one]);
     assert.equal(count.rows[0].count, 3, "Concurrent acceptance must never spend a fourth match");
     console.log("PASS concurrent three-match boundary across different opponents");
+    const chapter = (await admin.query("select title,subject,updated_at from public.chapters where id=$1",[ids.chapter])).rows[0];
+    const classes = (await admin.query("select class_id from public.chapter_classes where chapter_id=$1",[ids.chapter])).rows.map((row)=>row.class_id);
+    const pool = (await admin.query("select jsonb_agg(jsonb_build_object('prompt',q.prompt,'options',q.options,'correct_option_index',k.correct_option_index,'explanation',k.explanation) order by q.position) as questions from public.chapter_questions q join public.question_answer_keys k on k.question_id=q.id where q.chapter_id=$1",[ids.chapter])).rows[0].questions;
+    // Preserve microseconds: JavaScript Date truncates PostgreSQL timestamps.
+    const version = (await admin.query("select updated_at::text as version from public.chapters where id=$1",[ids.chapter])).rows[0].version;
+    const saves = await Promise.allSettled([first,second].map((client,index)=>acting(client,ids.teacher,
+      "select public.save_chapter_versioned($1,$2,$3,$4,$5,$6,true,$7)",
+      [ids.stream,ids.chapter,chapter.title+index,chapter.subject,classes,JSON.stringify(pool),version])));
+    assert.equal(saves.filter((result)=>result.status==='fulfilled').length,1,"Only one editor may save the expected version");
+    assert.equal(saves.find((result)=>result.status==='rejected').reason.code,"SC001");
+    console.log("PASS concurrent chapter editing rejects the stale save");
   } finally {
     if (ids) {
       const admin = clients[0];

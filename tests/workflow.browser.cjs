@@ -25,7 +25,7 @@ function classroomServer() {
     release() { release?.(); },
     async rpc(userId, name, args) {
       calls.push({ userId, name, args });
-      if (name === "save_chapter") {
+      if (name === "save_chapter_versioned") {
         assert.equal(userId, "teacher-live");
         assert.equal(args.p_questions.length, 15);
         tables.chapters.push({ id: "workflow-chapter", stream_id: args.p_stream_id, title: args.p_title, subject: args.p_subject, published_at: new Date().toISOString(), created_at: new Date().toISOString() });
@@ -143,7 +143,7 @@ async function run() {
       await teacher.screenshot({path:path.join(screenshotDir, 'question-editor-' + width + '.png')});
       await teacher.locator("#livePublish").click();
       await teacher.locator('[data-edit-chapter="workflow-chapter"]').waitFor();
-      assert.equal(server.calls.filter((call) => call.name === "save_chapter").length, 1);
+      assert.equal(server.calls.filter((call) => call.name === "save_chapter_versioned").length, 1);
       assert.equal(server.tables.chapter_questions.length, 15);
       assert.equal(server.tables.chapter_questions[0].prompt, "Edited first question");
       assert.equal(server.tables.chapter_questions[1].prompt, "Edited second question");

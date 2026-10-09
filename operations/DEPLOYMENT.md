@@ -1,6 +1,6 @@
 # Account, learning and reliability release
 
-The implementation is ready for review. It has **not** been deployed to the live database or website.
+The implementation is ready for review. It has **not** been deployed to the live database or website. Apply the pending reliability migration, then `20261009163852_chapter_versioned_saves.sql`, before the current frontend. The latter adds checked versioned chapter saves and separate practice/review progress. See [HOSTING.md](HOSTING.md) for publishing through GitHub Pages.
 
 ## What is included
 
@@ -16,7 +16,7 @@ The implementation is ready for review. It has **not** been deployed to the live
 
 All eight tracked migrations were applied to an isolated PostgreSQL engine. `tests/timed-matches.sql` and `tests/reliability.sql` passed. Checks cover timers, single ELO application, mixed first/second-player match limits, ownership and cross-class RLS, anonymous denial, copy/archive/restore/unpublish, practice scoring and duplicate retry, teacher progress, role-escalation denial and diagnostic payload validation. An isolated engine snapshot was restored and those invariants revalidated.
 
-The concurrent-session suite also passed against a separate native PostgreSQL 17.10 server bound to localhost. Independent connections verified that simultaneous acceptance creates one match, simultaneous submissions apply ELO once, and concurrent acceptances at the three-match boundary allow only one remaining match. Cleanup removed all five synthetic accounts. `tests/database.integration.cjs` refuses the live project's connection and cleans up its committed fixture in `finally`. Hosted Supabase integration remains a deployment check.
+The concurrent-session suite also passed against a separate native PostgreSQL 17.10 server bound to localhost. Independent connections verified that simultaneous acceptance creates one match, simultaneous submissions apply ELO once, concurrent acceptances at the three-match boundary allow only one remaining match, and two editors saving the same chapter version produce one success and one stale-version rejection. Cleanup removed all five synthetic accounts. `tests/database.integration.cjs` refuses the live project's connection and cleans up its committed fixture in `finally`. Hosted Supabase integration remains a deployment check.
 
 Browser checks cover desktop (1440 px) and mobile (390/320 px), including draft recovery, cancel/close protection, archive/restore, copy, rename, account requests, practice submission retry and mistake review. Additional checks cover removal of reverted drafts, blocked draft discard, keyboard focus containment, cancellation of modal replacement, account-request loading retry/pending state, and late name-save responses preserving a newly opened modal.
 

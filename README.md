@@ -14,6 +14,8 @@ There is no build step. The app loads Supabase JS from a CDN and uses the projec
 
 See [supabase/README.md](supabase/README.md) for database setup, access rules, and teacher role assignment.
 
+See [инструкция по публикации](operations/HOSTING.md) for GitHub Pages, required database migrations, SMTP and Auth redirects. Website publication is manual and disabled until configured.
+
 ## Account flow
 
 1. Sign in with an existing account or create an account. Confirm your email if required.
@@ -83,7 +85,7 @@ The offline option serves workspace files directly to Chrome without a local HTT
 
 ## Reliability release — deployment pending
 
-The new account/material/practice operations require `supabase/migrations/20261009070651_account_learning_reliability.sql`. It is locally validated but **not applied to the live project**. Deploy the database migration before the updated frontend. See [deployment and rollback instructions](operations/DEPLOYMENT.md) for the exact release, backup, SMTP and test-project requirements.
+The new account/material/practice operations require `supabase/migrations/20261009070651_account_learning_reliability.sql`, followed by `20261009163852_chapter_versioned_saves.sql`. Both are locally validated but **not applied to the live project**. Deploy the database migrations before the updated frontend. The editor checks chapter versions and uses the chapter's own teaching space; full practice and mistake reviews have separate progress rows. See [deployment and rollback instructions](operations/DEPLOYMENT.md) for the exact release, backup, SMTP and test-project requirements.
 
 Development dependencies are pinned in `package.json` and `pnpm-lock.yaml`. After `pnpm install --frozen-lockfile`, run:
 

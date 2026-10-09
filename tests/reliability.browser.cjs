@@ -27,7 +27,7 @@ function installReliabilityServer(fixture) {
       window.__reliabilityCalls.push({ name, args });
       const chapter = tables.chapters.find((row) => row.id === args.p_chapter_id);
       if (name === "report_client_error") return { error: null };
-      if (name === "get_learning_progress") return { data: progress, error: null };
+      if (name === "get_learning_progress_by_mode") return { data: progress, error: null };
       if (name === "manage_chapter") {
         if (args.p_action === "archive") chapter.archived_at = new Date().toISOString();
         if (args.p_action === "restore") chapter.archived_at = null;
@@ -52,7 +52,8 @@ function installReliabilityServer(fixture) {
         classroom.archived_at = args.p_action === "archive" ? new Date().toISOString() : null;
         return { data: classroom.id, error: null };
       }
-      if (name === "save_chapter") {
+      if (name === "save_chapter_versioned") {
+        if (window.__chapterConflict) return { error: { code: "SC001", message: "This chapter has changed in another window. Your edits are kept in this editor. Close it, refresh your workspace and reopen the chapter before saving." } };
         if (window.__pauseChapterSave) await new Promise((resolve) => { window.__resumeChapterSave = resolve; });
         Object.assign(chapter, { title: args.p_title, subject: args.p_subject, published_at: args.p_publish ? new Date().toISOString() : null, updated_at: new Date().toISOString() });
         tables.chapter_questions = tables.chapter_questions.filter((q) => q.chapter_id !== chapter.id);
@@ -70,10 +71,11 @@ function installReliabilityServer(fixture) {
       if (name === "cancel_account_request") { tables.account_requests.find((request) => request.id === args.p_id).status = "cancelled"; return { error: null }; }
       if (name === "get_practice_questions") return { data: tables.chapter_questions.filter((q) => q.chapter_id === chapter.id).slice(0,2).map((q) => ({ ...q, correct_option_index: 0, explanation: "Practice explanation" })), error: null };
       if (name === "get_missed_practice_questions") return { data: missed, error: null };
-      if (name === "submit_practice") {
+      if (name === "submit_practice_round") {
         if (!failedPractice) { failedPractice = true; return { error: { status: 500, code: "server_error" } }; }
         const correct = args.p_answers.filter((answer) => answer.answer === 0).length;
-        progress = [{ chapter_id: chapter.id, user_id: fixture.userId, attempt_count: 1, latest_accuracy: Math.round(correct / args.p_answers.length * 100) }];
+        progress = progress.filter((entry) => entry.is_review !== args.p_review);
+        progress.push({ chapter_id: chapter.id, user_id: fixture.userId, is_review: args.p_review, attempt_count: 1, latest_accuracy: Math.round(correct / args.p_answers.length * 100) });
         missed = args.p_answers.filter((answer) => answer.answer !== 0).map((answer) => ({ ...tables.chapter_questions.find((q) => q.id === answer.question_id), correct_option_index: 0, explanation: "Practice explanation" }));
         return { data: { correct_count: correct, question_count: args.p_answers.length }, error: null };
       }
@@ -145,6 +147,12 @@ async function main() {
       assert.match(await teacher.locator('[data-question="0"] summary').innerText(), /Unsaved inline question/);
       await assertLayout(teacher, "restored-editor-" + width, true);
       teacher.on("dialog", (dialog) => dialog.accept());
+      await teacher.evaluate(() => { window.__chapterConflict = true; });
+      await teacher.locator("#livePublish").click();
+      await teacher.locator('#livePublishHint[role="alert"]').waitFor();
+      assert.match(await teacher.locator("#livePublishHint").innerText(), /changed in another window/);
+      assert.equal(await teacher.locator("#liveChapterTitle").inputValue(), "Unsaved local chapter");
+      await teacher.evaluate(() => { window.__chapterConflict = false; });
       await teacher.evaluate(() => { window.__pauseChapterSave = true; });
       await teacher.locator("#livePublish").click();
       await teacher.waitForFunction(() => typeof window.__resumeChapterSave === "function");
@@ -178,6 +186,14 @@ async function main() {
       await act(teacher, '[data-manage-class="class-history"][data-action="archive"]');
       await teacher.locator('[data-manage-class="class-history"][data-action="restore"]').waitFor({state:"attached"});
       await act(teacher, '[data-manage-class="class-history"][data-action="restore"]');
+      await teacher.locator('[data-live-tab="chapters"]').click();
+      await teacher.locator('[data-edit-chapter="chapter-science"]').click();
+      assert.equal(await teacher.locator('.live-check-list input[value="class-science"]').count(), 1);
+      assert.equal(await teacher.locator('.live-check-list input[value="class-history"]').count(), 0);
+      await teacher.locator("#livePublish").click();
+      await teacher.locator("#modalBackdrop").waitFor({state:"hidden"});
+      const scienceSave = await teacher.evaluate(() => window.__reliabilityCalls.find((call) => call.name === "save_chapter_versioned" && call.args.p_chapter_id === "chapter-science"));
+      assert.equal(scienceSave.args.p_stream_id, "stream-science");
       await assertLayout(teacher, "teacher-materials-" + width);
       assert.deepEqual(te, []); await tc.close();
 
@@ -207,7 +223,7 @@ async function main() {
       await student.getByText("Could not submit your answers. Please try again.", {exact:true}).waitFor();
       await student.locator("#nextQuestion").click();
       await student.locator("#reviewPracticeMistakes").waitFor();
-      const attempts = await student.evaluate(() => window.__reliabilityCalls.filter((call) => call.name === "submit_practice"));
+      const attempts = await student.evaluate(() => window.__reliabilityCalls.filter((call) => call.name === "submit_practice_round"));
       assert.equal(attempts[0].args.p_attempt_id, attempts[1].args.p_attempt_id);
       await student.locator("#reviewPracticeMistakes").click();
       await student.getByText("Question 1 of 1", {exact:true}).waitFor();
@@ -215,6 +231,8 @@ async function main() {
       await student.getByText("All answers correct.", {exact:true}).waitFor();
       await student.getByRole("button", {name:"Close",exact:true}).click();
       await student.getByRole("heading", {name:"Your learning progress"}).waitFor();
+      await student.getByRole("cell", {name:"Full practice",exact:true}).waitFor();
+      await student.getByRole("cell", {name:"Mistake review",exact:true}).waitFor();
       await student.evaluate(() => window.scholaReportError("account", {code:"password=secret", message:"private text"}));
       const reports = await student.evaluate(() => window.__reliabilityCalls.filter((call) => call.name === "report_client_error"));
       assert.doesNotMatch(JSON.stringify(reports), /password=secret|private text/);

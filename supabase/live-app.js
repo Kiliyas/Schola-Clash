@@ -83,7 +83,7 @@
       rows(client.from("stream_ratings").select("stream_id, user_id, rating").in("stream_id", streamIds)),
     ]);
     const chapterProgress = progressByStream.flat();
-    const practiceProgress = (await Promise.all(streamIds.map((streamId) => rows(client.rpc("get_learning_progress", { p_stream_id: streamId }))))).flat();
+    const practiceProgress = (await Promise.all(streamIds.map((streamId) => rows(client.rpc("get_learning_progress_by_mode", { p_stream_id: streamId }))))).flat();
     const memberIds = [...new Set(members.map((member) => member.user_id))];
     const people = memberIds.length
       ? await rows(client.from("user_profiles").select("id, display_name, role").in("id", memberIds))
@@ -128,7 +128,7 @@
       : [];
     const questionCounts = Object.fromEntries(chapters.map((chapter) => [chapter.id, 0]));
     questionRows.forEach((question) => { questionCounts[question.chapter_id] = (questionCounts[question.chapter_id] || 0) + 1; });
-    const practiceProgress = await rows(client.rpc("get_learning_progress"));
+    const practiceProgress = await rows(client.rpc("get_learning_progress_by_mode"));
     return { streams, classes, chapterLinks, chapters, members, people, challenges, matches, ratings, attempts, questionCounts, practiceProgress };
   }
 
@@ -467,9 +467,11 @@
 
   async function openChapterEditor(chapterId = null) {
     const userId = model.userId;
-    const stream = model.streams[0];
-    if (!stream || !model.classes.length) return toast("Create a class before building a chapter.");
     const existing = chapterId ? model.chapters.find((chapter) => chapter.id === chapterId) : null;
+    const stream = existing ? model.streams.find((item) => item.id === existing.stream_id)
+      : model.streams.find((item) => model.classes.some((classroom) => classroom.stream_id === item.id && !classroom.archived_at));
+    const editorClasses = model.classes.filter((classroom) => classroom.stream_id === stream?.id && !classroom.archived_at);
+    if (!stream || !editorClasses.length) return toast("Add or restore a class in this teaching space before editing a chapter.");
     const publishedExisting = Boolean(existing?.published_at);
     let questions = [];
     if (existing) {
@@ -544,7 +546,7 @@
         });
       });
     };
-    openModal(`<div class="modal-header"><div><p class="eyebrow">CHAPTER EDITOR</p><h2 id="modalTitle">${publishedExisting ? "Edit published chapter" : existing ? "Edit draft" : "Create a chapter"}</h2></div><button class="button button-quiet" id="liveCloseChapter" type="button">Close</button></div><p class="modal-description">${publishedExisting ? "Changes apply to future practice and matches. Existing matches keep their original questions; open invitations will be cancelled." : "Add four choices and a correct answer for each question. At least 15 complete questions are required to publish."}</p><div class="form-grid"><div class="field"><label for="liveChapterTitle">Chapter title</label><input id="liveChapterTitle" maxlength="160" value="${escape(existing?.title || "")}" placeholder="For example, World War I" required></div><div class="field"><label for="liveChapterSubject">Subject</label><input id="liveChapterSubject" maxlength="100" value="${escape(existing?.subject || "")}" placeholder="History"></div></div><div class="field"><span class="field-label">Assign to classes</span><div class="live-check-list">${model.classes.filter((classroom) => !classroom.archived_at).map((classroom) => `<label><input type="checkbox" value="${escape(classroom.id)}" ${selected.has(classroom.id) || (!existing && model.classes.length === 1) ? "checked" : ""}><span>${escape(classroom.name)}</span></label>`).join("")}</div></div><div class="question-editor chapter-question-editor"><div class="live-editor-heading"><h3>Questions <span class="small" id="liveQuestionCount"></span></h3></div><div class="question-list" id="liveQuestionList"></div><h3 id="liveQuestionEditorTitle">Add a question</h3><div class="field"><label for="livePrompt">Question</label><textarea id="livePrompt" rows="2" maxlength="2000" placeholder="Write a clear question"></textarea></div><div class="form-grid">${[0, 1, 2, 3].map((index) => `<div class="field"><label for="liveOption${index}">Option ${"ABCD"[index]}</label><input id="liveOption${index}" maxlength="500"></div>`).join("")}<div class="field"><label for="liveCorrect">Correct option</label><select id="liveCorrect"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></div><div class="field"><label for="liveExplanation">Explanation (optional)</label><input id="liveExplanation" maxlength="4000"></div></div><button class="button button-secondary" id="liveAddQuestion" type="button">＋ Add question</button><p class="small">Question changes are saved when you save the chapter.</p></div><div class="modal-footer"><span class="small" id="livePublishHint"></span><div class="modal-actions">${publishedExisting ? `<button class="button button-primary" id="livePublish" type="button">Save changes</button>` : `<button class="button button-outline" id="liveSaveDraft" type="button">Save draft</button><button class="button button-primary" id="livePublish" type="button">${existing ? "Save and publish" : "Publish chapter"}</button>`}</div></div>`);
+    openModal(`<div class="modal-header"><div><p class="eyebrow">CHAPTER EDITOR</p><h2 id="modalTitle">${publishedExisting ? "Edit published chapter" : existing ? "Edit draft" : "Create a chapter"}</h2></div><button class="button button-quiet" id="liveCloseChapter" type="button">Close</button></div><p class="modal-description">${publishedExisting ? "Changes apply to future practice and matches. Existing matches keep their original questions; open invitations will be cancelled." : "Add four choices and a correct answer for each question. At least 15 complete questions are required to publish."}</p><div class="form-grid"><div class="field"><label for="liveChapterTitle">Chapter title</label><input id="liveChapterTitle" maxlength="160" value="${escape(existing?.title || "")}" placeholder="For example, World War I" required></div><div class="field"><label for="liveChapterSubject">Subject</label><input id="liveChapterSubject" maxlength="100" value="${escape(existing?.subject || "")}" placeholder="History"></div></div><div class="field"><span class="field-label">Assign to classes</span><div class="live-check-list">${editorClasses.map((classroom) => `<label><input type="checkbox" value="${escape(classroom.id)}" ${selected.has(classroom.id) || (!existing && editorClasses.length === 1) ? "checked" : ""}><span>${escape(classroom.name)}</span></label>`).join("")}</div></div><div class="question-editor chapter-question-editor"><div class="live-editor-heading"><h3>Questions <span class="small" id="liveQuestionCount"></span></h3></div><div class="question-list" id="liveQuestionList"></div><h3 id="liveQuestionEditorTitle">Add a question</h3><div class="field"><label for="livePrompt">Question</label><textarea id="livePrompt" rows="2" maxlength="2000" placeholder="Write a clear question"></textarea></div><div class="form-grid">${[0, 1, 2, 3].map((index) => `<div class="field"><label for="liveOption${index}">Option ${"ABCD"[index]}</label><input id="liveOption${index}" maxlength="500"></div>`).join("")}<div class="field"><label for="liveCorrect">Correct option</label><select id="liveCorrect"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></div><div class="field"><label for="liveExplanation">Explanation (optional)</label><input id="liveExplanation" maxlength="4000"></div></div><button class="button button-secondary" id="liveAddQuestion" type="button">＋ Add question</button><p class="small">Question changes are saved when you save the chapter.</p></div><div class="modal-footer"><span class="small" id="livePublishHint"></span><div class="modal-actions">${publishedExisting ? `<button class="button button-primary" id="livePublish" type="button">Save changes</button>` : `<button class="button button-outline" id="liveSaveDraft" type="button">Save draft</button><button class="button button-primary" id="livePublish" type="button">${existing ? "Save and publish" : "Publish chapter"}</button>`}</div></div>`);
     drawQuestions();
     const editorDraft = window.ScholaEditorDrafts.install({
       userId, chapterId, version: existing?.updated_at,
@@ -620,7 +622,7 @@
       controls.forEach(({ element }) => { element.disabled = true; });
       editorDraft.setSaving(true);
       try {
-        const { error } = await client.rpc("save_chapter", {
+        const { error } = await client.rpc("save_chapter_versioned", {
           p_stream_id: stream.id,
           p_chapter_id: existing?.id || null,
           p_title: title,
@@ -628,6 +630,7 @@
           p_class_ids: classIds,
           p_questions: questions.map((question) => ({ prompt: question.prompt, options: question.options, correct_option_index: question.correct, explanation: question.explanation })),
           p_publish: publishChapter,
+          p_expected_updated_at: existing?.updated_at || null,
         });
         if (error) throw error;
         if (!isCurrentUser(userId)) return;
@@ -635,7 +638,16 @@
         toast(publishChapter ? "Chapter saved." : "Draft saved.");
         await refresh();
       } catch (error) {
-        if (isCurrentUser(userId)) toast(errorMessage(error, "Could not save this chapter."));
+        if (isCurrentUser(userId)) {
+          const message = errorMessage(error, "Could not save this chapter.");
+          if (savingEditor.isConnected) {
+            const status = document.getElementById("livePublishHint");
+            status.textContent = message;
+            status.setAttribute("role", "alert");
+            status.scrollIntoView({ block: "nearest" });
+          }
+          toast(message);
+        }
       } finally {
         editorDraft.setSaving(false);
         controls.forEach(({ element, disabled }) => { if (element.isConnected) element.disabled = disabled; });
@@ -675,10 +687,10 @@
   function renderPracticeProgress(teacher) {
     const progress = model.practiceProgress || [];
     if (!progress.length) return "";
-    return `<section class="learning-progress"><h2>${teacher ? "Practice progress" : "Your learning progress"}</h2><p class="small">Practice scores are separate from ELO. Accuracy is based on submitted practice answers.</p><div class="table-wrap"><table><thead><tr>${teacher ? "<th>Student</th>" : ""}<th>Topic / chapter</th><th>Rounds</th><th>Latest accuracy</th></tr></thead><tbody>${progress.map((entry) => {
+    return `<section class="learning-progress"><h2>${teacher ? "Practice progress" : "Your learning progress"}</h2><p class="small">Practice scores are separate from ELO. Accuracy is based on submitted practice answers.</p><div class="table-wrap"><table><thead><tr>${teacher ? "<th>Student</th>" : ""}<th>Topic / chapter</th><th>Mode</th><th>Rounds</th><th>Latest accuracy</th></tr></thead><tbody>${progress.map((entry) => {
       const chapter = model.chapters.find((item) => item.id === entry.chapter_id);
       const person = model.people.find((item) => item.id === entry.user_id);
-      return `<tr>${teacher ? `<td>${escape(person?.display_name || "Student")}</td>` : ""}<td>${escape(chapter?.subject || "General")} · ${escape(chapter?.title || "Archived chapter")}</td><td>${Number(entry.attempt_count)}</td><td>${Number(entry.latest_accuracy)}%</td></tr>`;
+      return `<tr>${teacher ? `<td>${escape(person?.display_name || "Student")}</td>` : ""}<td>${escape(chapter?.subject || "General")} · ${escape(chapter?.title || "Archived chapter")}</td><td>${entry.is_review ? "Mistake review" : "Full practice"}</td><td>${Number(entry.attempt_count)}</td><td>${Number(entry.latest_accuracy)}%</td></tr>`;
     }).join("")}</tbody></table></div></section>`;
   }
 
@@ -723,8 +735,8 @@
         isPractice: true,
         onFinish: async (answers) => {
           if (!isCurrentUser(userId)) return;
-          const { error } = await client.rpc("submit_practice", {
-            p_chapter_id: chapterId, p_attempt_id: attemptId,
+          const { error } = await client.rpc("submit_practice_round", {
+            p_chapter_id: chapterId, p_attempt_id: attemptId, p_review: missedOnly,
             p_answers: answers.map((answer, index) => ({ question_id: questions[index].id, answer: questions[index].originalOrder[answer] })),
           });
           if (error) throw error;
@@ -734,7 +746,7 @@
             const isCorrect = answers[index] === question.correct;
             return `<div class='answer-review'><strong class='${isCorrect ? 'is-correct' : 'is-incorrect'}'>${isCorrect ? 'Correct' : 'Review'} · ${index + 1}. ${escape(question.text)}</strong><span>Answer: ${'ABCD'[question.correct]} · ${escape(question.options[question.correct])}${question.explanation ? ` · ${escape(question.explanation)}` : ''}</span></div>`;
           }).join('');
-          openModal(`<div class='modal-header'><div><p class='eyebrow'>PRACTICE COMPLETE</p><h2 id='modalTitle'>Full chapter reviewed</h2></div><button class='button button-quiet' id='closePracticeResult' type='button'>Close</button></div><div class='result-score'>${correct}<span> / ${questions.length} correct</span></div><p class='modal-description'>Practice does not change ranked results or ratings.</p><div class='question-list'>${review}</div>${correct < questions.length ? `<button type="button" class="button button-secondary" id="reviewPracticeMistakes">Review missed questions (${questions.length - correct})</button>` : `<p class="small">All answers correct.</p>`}`);
+          openModal(`<div class='modal-header'><div><p class='eyebrow'>PRACTICE COMPLETE</p><h2 id='modalTitle'>${missedOnly ? 'Mistake review complete' : 'Full chapter reviewed'}</h2></div><button class='button button-quiet' id='closePracticeResult' type='button'>Close</button></div><div class='result-score'>${correct}<span> / ${questions.length} correct</span></div><p class='modal-description'>Practice does not change ranked results or ratings.</p><div class='question-list'>${review}</div>${correct < questions.length ? `<button type="button" class="button button-secondary" id="reviewPracticeMistakes">Review missed questions (${questions.length - correct})</button>` : `<p class="small">All answers correct.</p>`}`);
           document.getElementById('closePracticeResult').addEventListener('click', closeModal);
           document.getElementById('reviewPracticeMistakes')?.addEventListener('click', (event) => startPractice(chapterId, event.currentTarget, true));
           await refresh();

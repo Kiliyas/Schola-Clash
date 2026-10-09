@@ -142,9 +142,9 @@ function installSupabaseStub(fixtures) {
   fixtures.tables.account_requests ||= [];
   const originalRPC = client.rpc;
   client.rpc = (name, args) => {
-    if (name === "get_learning_progress") return Promise.resolve({ data: [], error: null });
+    if (name === "get_learning_progress_by_mode") return Promise.resolve({ data: [], error: null });
     if (name === "report_client_error") return Promise.resolve({ data: null, error: null });
-    if (name === "submit_practice") return Promise.resolve({ data: { correct_count: 1, question_count: args.p_answers.length }, error: null });
+    if (name === "submit_practice_round") return Promise.resolve({ data: { correct_count: 1, question_count: args.p_answers.length }, error: null });
     return originalRPC(name, args);
   };
   window.supabase = { createClient: () => client };

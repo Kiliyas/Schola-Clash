@@ -9,3 +9,4 @@ test-results/
 *.key
 supabase/.temp/
 __pycache__/
+_site/
