@@ -12,6 +12,20 @@ let accountIssue = null;
 let accountReady = false;
 let accountMode = "signin";
 let authRequestVersion = 0;
+const authLinkParams = new URLSearchParams(location.hash.slice(1));
+let recoveringPassword = authLinkParams.get("type") === "recovery";
+if (authLinkParams.has("error")) {
+  accountMode = "reset";
+  accountIssue = "This sign-in link is invalid or expired. Request a new password reset link.";
+  history.replaceState(null, "", location.pathname + location.search);
+}
+const accountButton = document.createElement("button");
+accountButton.id = "accountButton";
+accountButton.className = "button button-outline";
+accountButton.textContent = "My account";
+accountButton.hidden = true;
+authButton.before(accountButton);
+accountButton.addEventListener("click", openAccountEditor);
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
@@ -81,6 +95,7 @@ function paintAccountStatus() {
   accountStatus.textContent = !supabaseClient ? "Connection unavailable"
     : !accountReady ? "Connecting" : accountSession ? "Connected" : "Sign in to continue";
   accountStatus.title = accountProfile ? `Signed in as ${accountProfile.display_name}` : "";
+  accountButton.hidden = !accountProfile || recoveringPassword;
   roleBadge.hidden = !accountProfile;
   roleBadge.textContent = accountProfile?.role === "teacher" ? "Teacher" : "Student";
   authButton.textContent = accountSession ? "Sign out" : "Sign in";
@@ -105,6 +120,7 @@ function render() {
     app.innerHTML = '<section class="account-screen"><p class="eyebrow">YOUR ACCOUNT</p><h1>Getting things ready</h1><p class="lede" role="status">Checking your sign-in...</p></section>';
     return;
   }
+  if (recoveringPassword && accountSession) { renderPasswordForm(); return; }
   if (!accountSession) {
     renderAccountForm();
     return;
@@ -133,7 +149,7 @@ async function refreshAccount(session = undefined) {
     }
     accountSession = nextSession;
     accountProfile = null;
-    accountIssue = null;
+    accountIssue = authLinkParams.has("error") && !nextSession ? "This sign-in link is invalid or expired. Request a new password reset link." : null;
     if (nextSession?.user) {
       const { data, error } = await supabaseClient.from("user_profiles")
         .select("display_name, role").eq("id", nextSession.user.id).maybeSingle();
@@ -151,19 +167,27 @@ async function refreshAccount(session = undefined) {
 
 function renderAccountForm() {
   const signingUp = accountMode === "signup";
-  app.innerHTML = `<section class="account-screen"><p class="eyebrow">SCHOLA CLASH</p><h1>${signingUp ? "Create your account" : "Sign in"}</h1><p class="lede">${signingUp ? "Join your class and start learning." : "Continue to your classes and chapters."}</p><form id="authForm" class="account-form">
+  const resetting = accountMode === "reset";
+  app.innerHTML = `<section class="account-screen"><p class="eyebrow">SCHOLA CLASH</p><h1>${resetting ? "Reset your password" : signingUp ? "Create your account" : "Sign in"}</h1><p class="lede">${resetting ? "Enter your email to receive a link to choose a new password." : signingUp ? "Students join with a class code. Teachers: ask your school to enable teacher access after registration." : "Continue to your classes and chapters."}</p><form id="authForm" class="account-form">
     ${signingUp ? '<div class="field"><label for="authName">Your name</label><input id="authName" name="displayName" autocomplete="name" maxlength="80" required></div>' : ""}
     <div class="field"><label for="authEmail">Email</label><input id="authEmail" name="email" type="email" autocomplete="email" required></div>
-    <div class="field"><label for="authPassword">Password</label><input id="authPassword" name="password" type="password" autocomplete="${signingUp ? "new-password" : "current-password"}" minlength="8" required></div>
+    ${resetting ? "" : `<div class="field"><label for="authPassword">Password</label><input id="authPassword" name="password" type="password" autocomplete="${signingUp ? "new-password" : "current-password"}" minlength="8" required></div>`}
     <p class="account-message small" id="authMessage" role="status" aria-live="polite">${escapeHtml(accountIssue || "")}</p>
-    <button class="button button-primary account-submit" type="submit">${signingUp ? "Create account" : "Sign in"}</button>
-    <button class="account-switch" type="button" id="toggleAuthMode">${signingUp ? "Already have an account? Sign in" : "New here? Create an account"}</button>
+    <button class="button button-primary account-submit" type="submit">${resetting ? "Send reset link" : signingUp ? "Create account" : "Sign in"}</button>
+    ${!signingUp && !resetting ? '<button class="account-switch" type="button" id="forgotPassword">Forgot password?</button>' : ""}
+    <button class="account-switch" type="button" id="toggleAuthMode">${resetting || signingUp ? "Already have an account? Sign in" : "New here? Create an account"}</button>
   </form></section>`;
+  document.getElementById("forgotPassword")?.addEventListener("click", () => {
+    const email = document.getElementById("authEmail").value;
+    accountMode = "reset"; accountIssue = null; renderAccountForm();
+    document.getElementById("authEmail").value = email;
+    document.getElementById("authEmail").focus();
+  });
   document.getElementById("toggleAuthMode").addEventListener("click", () => {
-    accountMode = signingUp ? "signin" : "signup";
+    accountMode = signingUp || resetting ? "signin" : "signup";
     accountIssue = null;
     renderAccountForm();
-    document.getElementById(signingUp ? "authEmail" : "authName").focus();
+    document.getElementById(signingUp || resetting ? "authEmail" : "authName").focus();
   });
   document.getElementById("authForm").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -171,9 +195,19 @@ function renderAccountForm() {
     const submit = form.querySelector('button[type="submit"]');
     const message = document.getElementById("authMessage");
     const email = form.elements.email.value.trim();
+    if (signingUp && !form.elements.displayName.value.trim()) { message.textContent = "Enter your name."; return; }
+    const switches = form.querySelectorAll('button[type="button"]');
+    switches.forEach((button) => button.disabled = true);
     submit.disabled = true;
-    message.textContent = signingUp ? "Creating your account..." : "Signing in...";
+    form.setAttribute("aria-busy", "true");
+    message.textContent = resetting ? "Sending reset link..." : signingUp ? "Creating your account..." : "Signing in...";
     try {
+      if (resetting) {
+        const { error } = await supabaseClient.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+        if (error) throw error;
+        message.textContent = "If an account exists for " + email + ", a reset link is on its way. Check your inbox and spam folder.";
+        return;
+      }
       const result = signingUp
         ? await supabaseClient.auth.signUp({ email, password: form.elements.password.value,
           options: { data: { display_name: form.elements.displayName.value.trim() } } })
@@ -187,10 +221,52 @@ function renderAccountForm() {
       await refreshAccount(result.data.session);
       showToast(signingUp ? "Account created." : "Signed in.");
     } catch (error) {
-      message.textContent = userErrorMessage(error, signingUp ? "We couldn't create your account. Please try again." : "We couldn't sign you in. Please try again.");
+      message.textContent = userErrorMessage(error, resetting ? "We couldn't send the reset link. Please try again." : signingUp ? "We couldn't create your account. Please try again." : "We couldn't sign you in. Please try again.");
     } finally {
       submit.disabled = false;
+      form.removeAttribute("aria-busy");
+      switches.forEach((button) => button.disabled = false);
     }
+  });
+}
+
+function renderPasswordForm() {
+  app.innerHTML = `<section class="account-screen"><p class="eyebrow">YOUR ACCOUNT</p><h1>Choose a new password</h1><p class="lede">Use at least 8 characters.</p><form id="passwordForm" class="account-form"><div class="field"><label for="newPassword">New password</label><input id="newPassword" name="password" type="password" autocomplete="new-password" minlength="8" required></div><div class="field"><label for="confirmPassword">Confirm new password</label><input id="confirmPassword" name="confirmation" type="password" autocomplete="new-password" minlength="8" required></div><p id="passwordMessage" role="status" aria-live="polite"></p><button class="button button-primary" type="submit">Save password</button></form></section>`;
+  document.getElementById("passwordForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget, message = document.getElementById("passwordMessage");
+    if (form.elements.password.value !== form.elements.confirmation.value) { message.textContent = "Passwords do not match."; return; }
+    const button = form.querySelector("button"); button.disabled = true;
+    form.setAttribute("aria-busy", "true"); message.textContent = "Saving your password...";
+    try {
+      const { error } = await supabaseClient.auth.updateUser({ password: form.elements.password.value });
+      if (error) throw error;
+      recoveringPassword = false;
+      history.replaceState(null, "", location.pathname + location.search);
+      await refreshAccount(); showToast("Password updated.");
+    } catch (error) {
+      message.textContent = userErrorMessage(error, "Could not save your password. Request a new reset link if this one has expired.");
+    } finally { button.disabled = false; form.removeAttribute("aria-busy"); }
+  });
+}
+function openAccountEditor() {
+  const userId = accountSession?.user.id;
+  if (!userId || !accountProfile) return;
+  openModal(`<div class="modal-header"><h2 id="modalTitle">My account</h2><button class="button button-quiet" id="closeAccount" type="button">Close</button></div><form id="accountForm"><div class="field"><label for="displayName">Your name</label><input id="displayName" name="displayName" value="${escapeHtml(accountProfile.display_name)}" autocomplete="name" maxlength="80" required></div><p class="small">${escapeHtml(accountSession.user.email || "")} · ${escapeHtml(accountProfile.role)}</p><p id="accountMessage" role="status" aria-live="polite"></p><div class="modal-footer"><button class="button button-primary" type="submit">Save name</button></div></form>`);
+  document.getElementById("closeAccount").addEventListener("click", closeModal);
+  document.getElementById("accountForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget, message = document.getElementById("accountMessage"), name = form.elements.displayName.value.trim();
+    if (!name) { message.textContent = "Enter your name."; return; }
+    const button = form.querySelector('button[type="submit"]'); button.disabled = true;
+    form.setAttribute("aria-busy", "true"); message.textContent = "Saving your name...";
+    try {
+      const { data, error } = await supabaseClient.from("user_profiles").update({ display_name: name }).eq("id", userId).select("display_name, role").single();
+      if (error) throw error;
+      if (accountSession?.user.id !== userId) return;
+      accountProfile = data; closeModal(); render(); showToast("Name updated.");
+    } catch (error) { message.textContent = userErrorMessage(error, "Could not save your name. Please try again."); }
+    finally { button.disabled = false; form.removeAttribute("aria-busy"); }
   });
 }
 
@@ -203,6 +279,7 @@ authButton.addEventListener("click", async () => {
   try {
     const { error } = await supabaseClient.auth.signOut();
     if (error) throw error;
+    recoveringPassword = false; accountMode = "signin";
     await refreshAccount(null);
     showToast("Signed out.");
   } catch (error) {
@@ -291,15 +368,16 @@ window.scholaUserErrorMessage = userErrorMessage;
 window.scholaRefreshAccount = refreshAccount;
 
 window.setInterval(() => {
-  if (document.visibilityState === "visible" && accountSession && accountProfile) window.ScholaLiveApp?.refresh();
+  if (document.visibilityState === "visible" && accountSession && accountProfile && !recoveringPassword) window.ScholaLiveApp?.refresh();
 }, 10000);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && accountSession && accountProfile) window.ScholaLiveApp?.refresh();
+  if (document.visibilityState === "visible" && accountSession && accountProfile && !recoveringPassword) window.ScholaLiveApp?.refresh();
 });
 
 render();
 if (supabaseClient) {
-  supabaseClient.auth.onAuthStateChange((_event, session) => {
+  supabaseClient.auth.onAuthStateChange((event, session) => {
+    if (event === "PASSWORD_RECOVERY") recoveringPassword = true;
     window.setTimeout(() => refreshAccount(session), 0);
   });
   refreshAccount();

@@ -441,3 +441,21 @@ tbody tr:hover { background: #f7fafc; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+.account-message, #accountMessage, #passwordMessage, #joinMessage { overflow-wrap: anywhere; }
+.empty-state > .button { margin-top: 16px; }
+
+.question-row-actions { display: flex; flex-wrap: wrap; flex-shrink: 0; gap: 4px; }
+@media (max-width: 580px) { .question-row { flex-wrap: wrap; } .question-row-actions { margin-left: auto; } }
+.chapter-question-editor .question-list { max-height: none; overflow: visible; padding: 0; }
+.chapter-question { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 10px; background: #fff; }
+.chapter-question > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px; cursor: pointer; list-style: none; }
+.chapter-question > summary::-webkit-details-marker { display: none; }
+.question-edit-label { flex-shrink: 0; font-size: 13px; color: var(--muted); }
+.chapter-question[open] > summary { border-bottom: 1px solid var(--line); }
+.chapter-question-fields { padding: 16px; }
+.chapter-question-fields .question-row-actions { flex-wrap: wrap; gap: 8px; }
+.chapter-question-fields [data-live-remove] { margin-left: auto; }
+.chapter-question > summary:focus-visible { outline: 2px solid #315d46; outline-offset: 2px; }
+/* Keep class checkboxes compact inside the chapter's full-width field. */
+.field .live-check-list input[type="checkbox"] { width: 18px; height: 18px; min-width: 18px; flex: 0 0 18px; padding: 0; }

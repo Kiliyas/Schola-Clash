@@ -14,7 +14,7 @@ The browser is online-only, with authenticated student and teacher workspaces. T
 - Done: transactional database checks of actual duration, immutable deadlines, late-answer rejection, forfeit/no-contest, scoring/ELO, and duplicate completed submissions. All synthetic data is rolled back.
 - Remaining: simultaneous acceptance/submission, match-limit boundaries, and cross-class access checks in a disposable classroom. Browser fixtures do not establish these guarantees.
 
-After this phase, finish account recovery and onboarding, verify security and operational recovery, run a small classroom pilot, and prioritize new features from its feedback. Material generation and additional game modes are deferred until after the pilot.
+Account recovery, display-name editing, and first-use onboarding are implemented in the browser. Recovery email delivery and allowed redirect URLs still need a live deployment check. After this phase, verify security and operational recovery, run a small classroom pilot, and prioritize new features from its feedback. Material generation and additional game modes are deferred until after the pilot.
 
 ## 1. Lock and implement the duel rules — complete
 
@@ -85,4 +85,4 @@ Consider online live duels only if pilot feedback supports them. Consider speed 
 
 1. Add an opt-in backend integration suite using dedicated accounts and a disposable classroom, with no normal-user data changes.
 2. Test simultaneous requests, ELO calculation, deadlines, match limits, and unauthorized access against the actual database.
-3. Add password recovery and finish first-use onboarding, then prepare operational recovery and a one-class pilot.
+3. Verify recovery email delivery and allowed redirect URLs on the deployment, then prepare operational recovery and a one-class pilot.

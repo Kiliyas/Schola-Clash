@@ -189,7 +189,7 @@ async function run() {
           const url = new URL(route.request().url());
           if (url.hostname === "cdn.jsdelivr.net") return route.fulfill({ contentType: "application/javascript", body: "/* The client is provided by the isolated test fixture. */" });
           if (url.pathname === "/supabase/client-config.js") return route.fulfill({ contentType: "application/javascript", body: 'window.SCHOLA_SUPABASE_CONFIG = { url: "https://test.invalid", publishableKey: "test-public-key" };' });
-          if (url.origin === new URL(baseUrl).origin) return route.continue();
+          if (url.origin === new URL(baseUrl).origin) return process.env.SCHOLA_TEST_OFFLINE ? route.fulfill({ body: require("node:fs").readFileSync(path.join(__dirname, "..", url.pathname === "/" ? "index.html" : url.pathname)), contentType: url.pathname.endsWith(".js") ? "application/javascript" : url.pathname.endsWith(".css") ? "text/css" : "text/html" }) : route.continue();
           blockedNetwork.push(url.origin);
           return route.abort();
         });

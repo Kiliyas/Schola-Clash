@@ -31,6 +31,7 @@ function classroomServer() {
         tables.chapters.push({ id: "workflow-chapter", stream_id: args.p_stream_id, title: args.p_title, subject: args.p_subject, published_at: new Date().toISOString(), created_at: new Date().toISOString() });
         tables.chapter_classes = args.p_class_ids.map((class_id) => ({ chapter_id: "workflow-chapter", class_id }));
         tables.chapter_questions = args.p_questions.map((q, position) => ({ ...q, id: `q-${position}`, chapter_id: "workflow-chapter", position }));
+        tables.question_answer_keys = args.p_questions.map((q, position) => ({ question_id: `q-${position}`, correct_option_index: q.correct_option_index, explanation: q.explanation }));
         return result({ chapter_id: "workflow-chapter" });
       }
       if (name === "get_teacher_chapter_progress") {
@@ -76,12 +77,12 @@ function classroomServer() {
 }
 
 async function run() {
-  const screenshotDir = path.join(os.tmpdir(), "schola-workflow-smoke");
+  const screenshotDir = process.env.SCHOLA_SCREENSHOT_DIR || path.join(os.tmpdir(), "schola-workflow-smoke");
   await fs.mkdir(screenshotDir, { recursive: true });
   const browser = await chromium.launch({ headless: true, channel: process.env.SCHOLA_BROWSER_CHANNEL || "chrome" });
   let checks = 0;
   try {
-    for (const width of [1440, 390, 320]) {
+    for (const width of [1440, 390, 320].filter((width) => !process.env.SCHOLA_TEST_WIDTH || width === Number(process.env.SCHOLA_TEST_WIDTH))) {
       const server = classroomServer();
       const errors = [];
       const contexts = [];
@@ -93,7 +94,7 @@ async function run() {
         page.on("pageerror", (error) => errors.push(error.message));
         await page.route("**/*", (route) => {
           const url = route.request().url();
-          if (url.startsWith(baseUrl)) return route.continue();
+          if (url.startsWith(baseUrl)) return process.env.SCHOLA_TEST_OFFLINE ? route.fulfill({ body: require("node:fs").readFileSync(path.join(__dirname, "..", new URL(url).pathname === "/" ? "index.html" : new URL(url).pathname)), contentType: new URL(url).pathname.endsWith(".js") ? "application/javascript" : new URL(url).pathname.endsWith(".css") ? "text/css" : "text/html" }) : route.continue();
           if (/cdn\.jsdelivr\.net/.test(url)) return route.fulfill({ status: 200, body: "" });
           errors.push(`Unexpected network: ${url}`);
           return route.abort();
@@ -120,9 +121,37 @@ async function run() {
         for (let option = 0; option < 4; option += 1) await teacher.locator(`#liveOption${option}`).fill(`Choice ${option + 1}`);
         await teacher.locator("#liveAddQuestion").click();
       }
+      const firstQuestion = teacher.locator('[data-question="0"]');
+      await firstQuestion.locator('summary').click();
+      assert.equal(await firstQuestion.locator('[name="prompt"]').inputValue(), "Question 1");
+      await firstQuestion.locator('[name="prompt"]').fill("Edited first question");
+      await firstQuestion.locator('[name="option1"]').fill("Revised choice");
+      await firstQuestion.locator('[name="explanation"]').fill("Updated explanation");
+      await firstQuestion.locator('[data-apply-question]').click();
+      assert.equal(await teacher.locator("[data-question]").count(), 15);
+      await firstQuestion.locator('summary').click();
+      assert.equal(await firstQuestion.locator('[name="option1"]').inputValue(), "Revised choice");
+      await firstQuestion.locator('[name="prompt"]').fill("Cancelled edit");
+      await firstQuestion.locator('[data-cancel-question]').click();
+      assert.match(await firstQuestion.locator('summary').innerText(), /Edited first question/);
+      assert.doesNotMatch(await firstQuestion.locator('summary').innerText(), /Cancelled edit/);
+      const secondQuestion = teacher.locator('[data-question="1"]');
+      await secondQuestion.locator('summary').click();
+      await secondQuestion.locator('[name="prompt"]').fill("Edited second question");
+      assert.equal(await teacher.locator('#livePrompt').inputValue(), "");
+      await assertLayout(teacher, 'question-editor-' + width, true);
+      await teacher.screenshot({path:path.join(screenshotDir, 'question-editor-' + width + '.png')});
       await teacher.locator("#livePublish").click();
       await teacher.locator('[data-edit-chapter="workflow-chapter"]').waitFor();
       assert.equal(server.calls.filter((call) => call.name === "save_chapter").length, 1);
+      assert.equal(server.tables.chapter_questions.length, 15);
+      assert.equal(server.tables.chapter_questions[0].prompt, "Edited first question");
+      assert.equal(server.tables.chapter_questions[1].prompt, "Edited second question");
+      await teacher.locator('[data-edit-chapter="workflow-chapter"]').click();
+      await teacher.locator('[data-question="0"] summary').click();
+      assert.equal(await firstQuestion.locator('[name="prompt"]').inputValue(), "Edited first question");
+      assert.equal(await firstQuestion.locator('[name="explanation"]').inputValue(), "Updated explanation");
+      await teacher.locator("#liveCloseChapter").click();
       let first = await open("student-live");
       const second = await open("opponent-live");
       await first.locator('[data-live-challenge="workflow-chapter"]').click();

@@ -218,7 +218,7 @@
       ${stream ? `
         <div class="stats-grid">${statCard("▤", publishedCount, "Published chapters")}${statCard("♙", studentCount, "Students connected")}${statCard("▦", classCount, "Classes")}</div>
         <nav class="tab-bar" aria-label="Teacher workspace sections"><button class="tab-button active" data-live-tab="chapters">Chapters</button><button class="tab-button" data-live-tab="results">Results</button><button class="tab-button" data-live-tab="classes">Classes</button></nav>
-        <section class="tab-panel active" data-live-panel="chapters"><div class="section-heading"><div><h2>Your chapters</h2><p>Drafts stay private. Published chapters are available to their assigned classes.</p></div><span class="small">${model.chapters.length} total</span></div><div class="card-grid">${model.chapters.map(renderTeacherChapter).join("") || `<div class="empty-state"><strong>No chapters yet</strong>Create your first chapter for your classes.</div>`}</div>${classCount ? "" : `<div class="empty-state"><strong>Add a class first</strong>Chapters need at least one class before they can be assigned.</div>`}</section>
+        <section class="tab-panel active" data-live-panel="chapters"><div class="section-heading"><div><h2>Your chapters</h2><p>Drafts stay private. Published chapters are available to their assigned classes.</p></div><span class="small">${model.chapters.length} total</span></div><div class="card-grid">${model.chapters.map(renderTeacherChapter).join("") || `<div class="empty-state"><strong>No chapters yet</strong>Create your first chapter for your classes.</div>`}</div>${classCount ? "" : `<div class="empty-state"><strong>Add your first class</strong>Next, create a class, generate its join code, and share it with your students.<button class="button button-primary" id="liveAddFirstClass">Add class</button></div>`}</section>
         <section class="tab-panel" data-live-panel="results">${renderTeacherResults()}</section>
         <section class="tab-panel" data-live-panel="classes"><div class="section-heading"><div><h2>Your classes</h2><p>Share a class code so students can join with their own account.</p></div><button class="button button-secondary" id="liveAddClass">＋ Add class</button></div><div class="class-grid">${model.classes.map(renderTeacherClass).join("") || `<div class="empty-state"><strong>No classes yet</strong>Add your first class to invite students and publish chapters.</div>`}</div></section>`
         : `<section class="live-onboarding"><div class="live-onboarding-step">01</div><p class="eyebrow">FIRST STEP</p><h2>Create your teaching space</h2><p class="lede">Name your teaching space and add your first classes. You can create invite codes for students as soon as the classes are saved.</p><button class="button button-primary" id="liveCreateStream">Create teaching space <span aria-hidden="true">→</span></button></section>`}`;
@@ -226,6 +226,7 @@
     root.querySelector("#liveRefresh")?.addEventListener("click", () => refresh());
     root.querySelector("#liveCreateChapter")?.addEventListener("click", () => openChapterEditor());
     root.querySelector("#liveCreateStream")?.addEventListener("click", () => openStreamEditor());
+    root.querySelector("#liveAddFirstClass")?.addEventListener("click", () => openClassEditor(stream));
     root.querySelector("#liveAddClass")?.addEventListener("click", () => openClassEditor(stream));
     root.querySelectorAll("[data-edit-chapter]").forEach((button) => button.addEventListener("click", () => openChapterEditor(button.dataset.editChapter)));
     root.querySelectorAll("[data-new-invite]").forEach((button) => button.addEventListener("click", () => createInvite(button.dataset.newInvite, button)));
@@ -354,7 +355,8 @@
       if (!name || !classNames.length) return toast("Add a teaching space name and at least one class.");
       if (classNames.length > 30) return toast("Add no more than 30 classes at once.");
       if (new Set(classNames.map((item) => item.toLocaleLowerCase())).size !== classNames.length) return toast("Class names must be unique.");
-      button.disabled = true;
+      const originalLabel = button.textContent;
+      button.disabled = true; button.textContent = "Creating...";
       try {
         const { error } = await client.rpc("create_teacher_space", { p_name: name, p_class_names: classNames });
         if (error) throw error;
@@ -362,7 +364,7 @@
         toast("Teaching space created.");
         await refresh();
       } catch (error) {
-        button.disabled = false;
+        button.disabled = false; button.textContent = originalLabel;
         toast(errorMessage(error, "Could not create the teaching space."));
       }
     });
@@ -376,14 +378,15 @@
       const button = event.currentTarget;
       const name = document.getElementById("liveClassName").value.trim();
       if (!name) return toast("Enter a class name.");
-      button.disabled = true;
+      const originalLabel = button.textContent;
+      button.disabled = true; button.textContent = "Adding...";
       try {
         await rows(client.from("classrooms").insert({ stream_id: stream.id, name }));
         closeModal();
         toast("Class added.");
         await refresh();
       } catch (error) {
-        button.disabled = false;
+        button.disabled = false; button.textContent = originalLabel;
         toast(errorMessage(error, "Could not add this class."));
       }
     });
@@ -438,32 +441,85 @@
       }
     }
     const selected = new Set(model.assignments.filter((item) => item.chapter_id === chapterId).map((item) => item.class_id));
+    const questionDrafts = new Map();
+    const resetQuestionEditor = () => {
+      ["livePrompt", "liveOption0", "liveOption1", "liveOption2", "liveOption3", "liveExplanation"].forEach((id) => { document.getElementById(id).value = ""; });
+      document.getElementById("liveCorrect").value = "0";
+    };
+    const readQuestion = (editor) => ({
+      prompt: editor.querySelector('[name="prompt"]').value.trim(),
+      options: [0, 1, 2, 3].map((index) => editor.querySelector('[name="option' + index + '"]').value.trim()),
+      correct: Number(editor.querySelector('[name="correct"]').value),
+      explanation: editor.querySelector('[name="explanation"]').value.trim(),
+    });
+    const completeQuestion = (question) => question.prompt && question.options.every(Boolean);
     const drawQuestions = () => {
       const list = document.getElementById("liveQuestionList");
-      const count = document.getElementById("liveQuestionCount");
-      const hint = document.getElementById("livePublishHint");
-      if (!list || !count || !hint) return;
-      count.textContent = `· ${questions.length}`;
-      hint.textContent = questions.length >= 15 ? "Ready to publish" : `${15 - questions.length} more question${15 - questions.length === 1 ? "" : "s"} needed to publish`;
-      list.innerHTML = questions.map((question, index) => `<div class="question-row"><div class="question-row-copy"><strong>${index + 1}. ${escape(question.prompt)}</strong><span>Correct: ${"ABCD"[question.correct]} · ${escape(question.options[question.correct])}</span></div><button class="button button-quiet" type="button" data-live-remove="${index}" aria-label="Remove question ${index + 1}">Remove</button></div>`).join("") || `<p class="small">Add your first question below.</p>`;
-      list.querySelectorAll("[data-live-remove]").forEach((button) => button.addEventListener("click", () => {
-        questions.splice(Number(button.dataset.liveRemove), 1);
-        drawQuestions();
-      }));
+      document.getElementById("liveQuestionCount").textContent = '· ' + questions.length;
+      document.getElementById("livePublishHint").textContent = questions.length >= 15 ? "Ready to publish" : (15 - questions.length) + " more questions needed to publish";
+      list.innerHTML = questions.map((question, index) => {
+        const draft = questionDrafts.get(question) || question;
+        const field = (label, name, value, max, textarea = false) => '<div class="field"><label for="edit-' + index + '-' + name + '">' + label + '</label>' + (textarea ? '<textarea rows="2"' : '<input') + ' id="edit-' + index + '-' + name + '" name="' + name + '" maxlength="' + max + '"' + (textarea ? '>' + escape(value) + '</textarea>' : ' value="' + escape(value) + '">') + '</div>';
+        return '<details class="chapter-question" data-question="' + index + '" ' + (questionDrafts.has(question) ? 'open' : '') + '><summary><span class="question-row-copy"><strong>' + (index + 1) + '. ' + escape(question.prompt) + '</strong><span>Correct: ' + 'ABCD'[question.correct] + ' · ' + escape(question.options[question.correct]) + '</span></span><span class="question-edit-label">Edit ⌄</span></summary><div class="chapter-question-fields">' + field('Question', 'prompt', draft.prompt, 2000, true) + '<div class="form-grid">' + draft.options.map((option, i) => field('Option ' + 'ABCD'[i], 'option' + i, option, 500)).join('') + '</div><div class="field"><label for="edit-' + index + '-correct">Correct option</label><select id="edit-' + index + '-correct" name="correct">' + [0,1,2,3].map((i) => '<option value="' + i + '" ' + (draft.correct === i ? 'selected' : '') + '>' + 'ABCD'[i] + '</option>').join('') + '</select></div>' + field('Explanation (optional)', 'explanation', draft.explanation, 4000, true) + '<p class="small question-edit-status" role="status" aria-live="polite"></p><div class="question-row-actions"><button class="button button-secondary" type="button" data-apply-question>Done</button><button class="button button-quiet" type="button" data-cancel-question>Cancel</button><button class="button button-quiet" type="button" data-live-remove="' + index + '">Remove question</button></div></div></details>';
+      }).join("") || '<p class="small">Add your first question below.</p>';
+      list.querySelectorAll("[data-question]").forEach((editor) => {
+        const question = questions[Number(editor.dataset.question)];
+        const remember = () => {
+          questionDrafts.set(question, readQuestion(editor));
+          editor.querySelector(".question-edit-status").textContent = "Changes will be saved with the chapter.";
+        };
+        editor.addEventListener("input", remember);
+        editor.addEventListener("change", remember);
+        const redraw = () => {
+          drawQuestions();
+          list.querySelector('[data-question="' + questions.indexOf(question) + '"] summary')?.focus();
+        };
+        editor.querySelector("[data-apply-question]").addEventListener("click", () => {
+          const draft = readQuestion(editor);
+          if (!completeQuestion(draft)) {
+            editor.querySelector(".question-edit-status").textContent = "Enter the question and all four answer choices.";
+            return;
+          }
+          Object.assign(question, draft);
+          questionDrafts.delete(question);
+          redraw();
+        });
+        editor.querySelector("[data-cancel-question]").addEventListener("click", () => {
+          questionDrafts.delete(question);
+          redraw();
+        });
+        editor.querySelector("[data-live-remove]").addEventListener("click", () => {
+          questionDrafts.delete(question);
+          questions.splice(questions.indexOf(question), 1);
+          drawQuestions();
+        });
+      });
     };
-    openModal(`<div class="modal-header"><div><p class="eyebrow">CHAPTER EDITOR</p><h2 id="modalTitle">${publishedExisting ? "Edit published chapter" : existing ? "Edit draft" : "Create a chapter"}</h2></div><button class="button button-quiet" id="liveCloseChapter" type="button">Close</button></div><p class="modal-description">${publishedExisting ? "Changes apply to future practice and matches. Existing matches keep their original questions; open invitations will be cancelled." : "Add four choices and a correct answer for each question. At least 15 complete questions are required to publish."}</p><div class="form-grid"><div class="field"><label for="liveChapterTitle">Chapter title</label><input id="liveChapterTitle" maxlength="160" value="${escape(existing?.title || "")}" placeholder="For example, World War I" required></div><div class="field"><label for="liveChapterSubject">Subject</label><input id="liveChapterSubject" maxlength="100" value="${escape(existing?.subject || "")}" placeholder="History"></div></div><div class="field"><span class="field-label">Assign to classes</span><div class="live-check-list">${model.classes.map((classroom) => `<label><input type="checkbox" value="${escape(classroom.id)}" ${selected.has(classroom.id) || (!existing && model.classes.length === 1) ? "checked" : ""}><span>${escape(classroom.name)}</span></label>`).join("")}</div></div><div class="question-editor"><div class="live-editor-heading"><h3>Questions <span class="small" id="liveQuestionCount"></span></h3></div><div class="question-list" id="liveQuestionList"></div><h3>Add a question</h3><div class="field"><label for="livePrompt">Question</label><textarea id="livePrompt" rows="2" maxlength="2000" placeholder="Write a clear question"></textarea></div><div class="form-grid">${[0, 1, 2, 3].map((index) => `<div class="field"><label for="liveOption${index}">Option ${"ABCD"[index]}</label><input id="liveOption${index}" maxlength="500"></div>`).join("")}<div class="field"><label for="liveCorrect">Correct option</label><select id="liveCorrect"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></div><div class="field"><label for="liveExplanation">Explanation (optional)</label><input id="liveExplanation" maxlength="4000"></div></div><button class="button button-secondary" id="liveAddQuestion" type="button">＋ Add question</button></div><div class="modal-footer"><span class="small" id="livePublishHint"></span><div class="modal-actions">${publishedExisting ? `<button class="button button-primary" id="livePublish" type="button">Save changes</button>` : `<button class="button button-outline" id="liveSaveDraft" type="button">Save draft</button><button class="button button-primary" id="livePublish" type="button">${existing ? "Save and publish" : "Publish chapter"}</button>`}</div></div>`);
+    openModal(`<div class="modal-header"><div><p class="eyebrow">CHAPTER EDITOR</p><h2 id="modalTitle">${publishedExisting ? "Edit published chapter" : existing ? "Edit draft" : "Create a chapter"}</h2></div><button class="button button-quiet" id="liveCloseChapter" type="button">Close</button></div><p class="modal-description">${publishedExisting ? "Changes apply to future practice and matches. Existing matches keep their original questions; open invitations will be cancelled." : "Add four choices and a correct answer for each question. At least 15 complete questions are required to publish."}</p><div class="form-grid"><div class="field"><label for="liveChapterTitle">Chapter title</label><input id="liveChapterTitle" maxlength="160" value="${escape(existing?.title || "")}" placeholder="For example, World War I" required></div><div class="field"><label for="liveChapterSubject">Subject</label><input id="liveChapterSubject" maxlength="100" value="${escape(existing?.subject || "")}" placeholder="History"></div></div><div class="field"><span class="field-label">Assign to classes</span><div class="live-check-list">${model.classes.map((classroom) => `<label><input type="checkbox" value="${escape(classroom.id)}" ${selected.has(classroom.id) || (!existing && model.classes.length === 1) ? "checked" : ""}><span>${escape(classroom.name)}</span></label>`).join("")}</div></div><div class="question-editor chapter-question-editor"><div class="live-editor-heading"><h3>Questions <span class="small" id="liveQuestionCount"></span></h3></div><div class="question-list" id="liveQuestionList"></div><h3 id="liveQuestionEditorTitle">Add a question</h3><div class="field"><label for="livePrompt">Question</label><textarea id="livePrompt" rows="2" maxlength="2000" placeholder="Write a clear question"></textarea></div><div class="form-grid">${[0, 1, 2, 3].map((index) => `<div class="field"><label for="liveOption${index}">Option ${"ABCD"[index]}</label><input id="liveOption${index}" maxlength="500"></div>`).join("")}<div class="field"><label for="liveCorrect">Correct option</label><select id="liveCorrect"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></div><div class="field"><label for="liveExplanation">Explanation (optional)</label><input id="liveExplanation" maxlength="4000"></div></div><button class="button button-secondary" id="liveAddQuestion" type="button">＋ Add question</button><p class="small">Question changes are saved when you save the chapter.</p></div><div class="modal-footer"><span class="small" id="livePublishHint"></span><div class="modal-actions">${publishedExisting ? `<button class="button button-primary" id="livePublish" type="button">Save changes</button>` : `<button class="button button-outline" id="liveSaveDraft" type="button">Save draft</button><button class="button button-primary" id="livePublish" type="button">${existing ? "Save and publish" : "Publish chapter"}</button>`}</div></div>`);
     drawQuestions();
     document.getElementById("liveCloseChapter").addEventListener("click", closeModal);
     document.getElementById("liveAddQuestion").addEventListener("click", () => {
       const prompt = document.getElementById("livePrompt").value.trim();
       const options = [0, 1, 2, 3].map((index) => document.getElementById(`liveOption${index}`).value.trim());
       if (!prompt || options.some((option) => !option)) return toast("Add the question and all four answer choices.");
-      questions.push({ prompt, options, correct: Number(document.getElementById("liveCorrect").value), explanation: document.getElementById("liveExplanation").value.trim() });
-      ["livePrompt", "liveOption0", "liveOption1", "liveOption2", "liveOption3", "liveExplanation"].forEach((id) => { document.getElementById(id).value = ""; });
+      const question = { prompt, options, correct: Number(document.getElementById("liveCorrect").value), explanation: document.getElementById("liveExplanation").value.trim() };
+      questions.push(question);
+      resetQuestionEditor();
       drawQuestions();
       document.getElementById("livePrompt").focus();
     });
     const save = async (publish, button) => {
+      for (const [question, draft] of questionDrafts) {
+        if (!completeQuestion(draft)) {
+          const editor = document.querySelector('[data-question="' + questions.indexOf(question) + '"]');
+          editor.open = true;
+          editor.querySelector(".question-edit-status").textContent = "Enter the question and all four answer choices.";
+          editor.querySelector('[name="prompt"]').focus();
+          return;
+        }
+      }
+      for (const [question, draft] of questionDrafts) Object.assign(question, draft);
+      questionDrafts.clear();
       const publishChapter = publish || publishedExisting;
       const title = document.getElementById("liveChapterTitle").value.trim();
       const classIds = [...document.querySelectorAll(".live-check-list input:checked")].map((input) => input.value);
@@ -475,8 +531,9 @@
       if (!title) return toast("Add a chapter title.");
       if (!classIds.length) return toast("Assign the chapter to at least one class.");
       if (hasPendingQuestion) {
-        questions.push({ prompt: pendingPrompt, options: pendingOptions, correct: Number(document.getElementById("liveCorrect").value), explanation: pendingExplanation });
-        ["livePrompt", "liveOption0", "liveOption1", "liveOption2", "liveOption3", "liveExplanation"].forEach((id) => { document.getElementById(id).value = ""; });
+        const question = { prompt: pendingPrompt, options: pendingOptions, correct: Number(document.getElementById("liveCorrect").value), explanation: pendingExplanation };
+        questions.push(question);
+        resetQuestionEditor();
         drawQuestions();
       }
       if (questions.length > 100) return toast("A chapter can contain no more than 100 questions.");
@@ -638,21 +695,29 @@
   }
 
   function openJoinModal() {
-    openModal(`<div class="modal-header"><div><p class="eyebrow">CLASS INVITATION</p><h2 id="modalTitle">Join a class</h2></div><button class="button button-quiet" id="liveCloseJoin" type="button">Close</button></div><p class="modal-description">Enter the 12-character code from your teacher. Your account will be added to that class.</p><form id="liveJoinForm"><div class="field"><label for="liveJoinCode">Class code</label><input id="liveJoinCode" name="code" maxlength="20" autocomplete="off" placeholder="A1B2C3D4E5F6" required></div><div class="modal-footer"><span class="small">Signed in as ${escape(model.profile.display_name)}</span><button class="button button-primary" type="submit">Join class</button></div></form>`);
+    openModal(`<div class="modal-header"><div><p class="eyebrow">CLASS INVITATION</p><h2 id="modalTitle">Join a class</h2></div><button class="button button-quiet" id="liveCloseJoin" type="button">Close</button></div><p class="modal-description">Enter the 12-character code from your teacher. Your account will be added to that class.</p><form id="liveJoinForm"><p id="joinMessage" role="status" aria-live="polite"></p><div class="field"><label for="liveJoinCode">Class code</label><input id="liveJoinCode" name="code" maxlength="20" autocomplete="off" placeholder="A1B2C3D4E5F6" required></div><div class="modal-footer"><span class="small">Signed in as ${escape(model.profile.display_name)}</span><button class="button button-primary" type="submit">Join class</button></div></form>`);
     document.getElementById("liveCloseJoin").addEventListener("click", closeModal);
     document.getElementById("liveJoinForm").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const button = event.currentTarget.querySelector("button[type=submit]");
-      button.disabled = true;
+      const form = event.currentTarget;
+      const code = form.elements.code.value.replace(/[\s-]/g, "").toUpperCase();
+      const message = document.getElementById("joinMessage");
+      if (!/^[A-F0-9]{12}$/.test(code)) { message.textContent = "Enter the 12-character class code from your teacher."; return; }
+      const button = form.querySelector("button[type=submit]");
+      button.disabled = true; button.textContent = "Joining...";
+      form.setAttribute("aria-busy", "true");
+      message.textContent = "Checking your class code...";
       try {
-        const { data, error } = await client.rpc("join_class_by_code", { p_code: event.currentTarget.elements.code.value.trim() });
+        const { data, error } = await client.rpc("join_class_by_code", { p_code: code });
         if (error) throw error;
         closeModal();
         toast(data.status === "already_member" ? `You're already in ${data.class_name}.` : `Joined ${data.class_name}.`);
         await refresh();
       } catch (error) {
         button.disabled = false;
-        toast(errorMessage(error, "Could not join this class."));
+        button.textContent = "Join class";
+        form.removeAttribute("aria-busy");
+        message.textContent = errorMessage(error, "Could not join this class. Check the code with your teacher and try again.");
       }
     });
   }

@@ -59,3 +59,20 @@ The workflow suite uses a shared, stateful transport fixture with separate teach
 These browser suites validate workflows, not deployed Postgres scoring, RLS, or concurrency guarantees. They never send test writes to the connected Supabase project. The workflow suite also exercises countdown expiry and a device clock set years ahead; the quiz anchors its remaining time to the server response and a monotonic browser clock.
 
 `tests/timed-matches.sql` is an administrator-only database integration check. It creates synthetic users without credentials and a classroom inside a transaction, exercises the real RPCs, and rolls everything back. It verifies duration, unchanged deadlines after reopening/repeated acceptance, server-time responses, rejection of late answers, forfeit/no-contest behavior, on-time scoring/ELO, and no duplicate rating application. Run the entire file, including `rollback`, in a trusted SQL session after all migrations. Concurrent requests and cross-class RLS checks still need separate integration coverage.
+
+## Account management
+
+Use **Forgot password?** on the sign-in screen to request a recovery email, then follow its link and enter the new password twice. **My account** lets signed-in users change their display name. Teacher roles are still assigned by a trusted school administrator.
+
+In Supabase Auth URL Configuration, set the production Site URL and allow the exact app URL used for recovery (including the path and local development URL when needed). Configure email delivery before testing real recovery emails. Recovery redirects to the app's current origin and pathname.
+
+Browser checks use isolated Supabase fixtures and do not send real emails:
+
+```powershell
+node tests/account.browser.cjs
+$env:SCHOLA_TEST_OFFLINE = "1"
+node tests/profiles.browser.cjs
+node tests/workflow.browser.cjs
+```
+
+The offline option serves workspace files directly to Chrome without a local HTTP server.
